@@ -3,6 +3,8 @@ import { requireApiKey, unauthorized } from '@/lib/auth'
 import type { CheckStatus } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
+export const revalidate = 0
 
 /**
  * GET /api/senders/check?channel=imessage&address=<addr>

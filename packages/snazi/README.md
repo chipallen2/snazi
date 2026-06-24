@@ -1,4 +1,4 @@
-# soup-nazi — iMessage wrapper CLI
+# snazi — iMessage wrapper CLI
 
 > "No messages for you."
 
@@ -17,12 +17,12 @@ and printed only when the gate opens.
 agent wants to know what's new
         │
         ▼
-  soup-nazi list-new        ──►  reveals WHO + status (approved/denied/unknown)
+  snazi list-new            ──►  reveals WHO + status (approved/denied/unknown)
         │                         (never the message text)
         │  unknown sender? agent asks Chip: "approve +1555…?"
-        │  Chip approves via the dashboard → server list updated
+        │  Chip approves: snazi approve +1555… --channel imessage
         ▼
-  soup-nazi read <sender>   ──►  CLI asks server: is this sender approved?
+  snazi read <sender>       ──►  CLI asks server: is this sender approved?
                                    ├─ approved → prints message text
                                    └─ otherwise → "No messages for you."
 ```
@@ -36,44 +36,53 @@ CLI only *checks* it. It cannot reveal content for a non-approved sender.
 ./install.sh
 ```
 
-This runs `npm install && npm run build`, creates `~/.soup-nazi/config.json`
+This runs `npm install && npm run build`, creates `~/.snazi/config.json`
 (template), and prints next steps. Then:
 
-1. Edit `~/.soup-nazi/config.json`:
+1. Edit `~/.snazi/config.json`:
    ```json
    {
-     "apiUrl": "https://your-deployment.vercel.app",
-     "apiKey": "<SOUP_NAZI_API_KEY>"
+     "apiUrl": "https://soup-nazi-agent.vercel.app",
+     "apiKey": "<SOUP_NAZI_API_KEY>",
+     "adminKey": "<SOUP_NAZI_ADMIN_KEY>",
+     "channels": ["imessage"]
    }
    ```
 2. Grant **Full Disk Access** to your terminal (System Settings → Privacy &
    Security → Full Disk Access) so it can read `chat.db`.
-3. Optional: `npm link` to put `soup-nazi` on your PATH.
+3. Optional: `npm link` to put `snazi` on your PATH.
 
 ## Commands
 
-| Command | What it reveals |
+| Command | What it does |
 | --- | --- |
-| `soup-nazi list-new [--since <min>]` | Distinct inbound senders, message counts, latest timestamp, and approval status. **No text.** Default window 60 min. |
-| `soup-nazi read <sender> [--since <min>]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
-| `soup-nazi status` | Config path, apiUrl, masked key, server reachability. |
+| `snazi list-new [--channel <id>] [--since <min>]` | Distinct inbound senders, message counts, latest timestamp, and approval status. **No text.** Default window 60 min. |
+| `snazi read <sender> [--channel <id>] [--since <min>]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
+| `snazi check <sender> --channel <id>` | Print one sender's approval status (`approved`/`denied`/`unknown`). |
+| `snazi approve <sender> --channel <id> [--label <name>]` | Approve a sender. Requires the admin key. |
+| `snazi deny <sender> --channel <id>` | Deny a sender. Requires the admin key. |
+| `snazi channels list` | List configured channels from `~/.snazi/config.json`. |
+| `snazi channels add <channel>` | Add a channel (e.g. `snazi channels add imessage`). |
+| `snazi status` | Config path, apiUrl, masked keys, channels, server reachability. |
 
 All output is JSON.
 
 ### Examples
 
 ```bash
-soup-nazi list-new --since 180
+snazi list-new --since 180
 # [
 #   { "sender": "+15551234567", "message_count": 3,
 #     "latest_at": "2026-06-23T22:10:04.000Z", "status": "unknown" }
 # ]
 
-soup-nazi read "+15551234567"
+snazi read "+15551234567"
 # { "error": "Sender not approved. No messages for you.", "status": "unknown" }
 
-# ...after Chip approves the sender in the dashboard...
-soup-nazi read "+15551234567"
+snazi approve "+15551234567" --channel imessage --label "Mom"
+# { "ok": true, "channel": "imessage", "sender": "+15551234567", "status": "approved", "label": "Mom" }
+
+snazi read "+15551234567"
 # { "sender": "+15551234567", "status": "approved", "since_minutes": 60,
 #   "messages": [ { "date": "...", "text": "hey are we still on for lunch?" } ] }
 ```

@@ -28,24 +28,27 @@ thing: manage an approve/deny list of senders per channel.
   `SOUP_NAZI_ADMIN_KEY` (mutate). The dashboard mutates via the protected API
   routes using server actions — the admin key never reaches the browser.
 
-### Part B — Mac wrapper CLI (`packages/imessage-cli`): the LOCAL gate
+### Part B — Mac wrapper CLI (`packages/snazi`): the LOCAL gate
 A plain on-demand CLI (TypeScript → `dist/`). **Not a daemon. No launchd.** The
 agent runs it on demand on Chip's Mac, where it reads
 `~/Library/Messages/chat.db` (read-only).
 
-- `soup-nazi list-new` → reveals **who** messaged + approval status. Never text.
-- `soup-nazi read <sender>` → checks the server first; prints text **only if
+- `snazi list-new` → reveals **who** messaged + approval status. Never text.
+- `snazi read <sender>` → checks the server first; prints text **only if
   approved**, otherwise "No messages for you."
-- `soup-nazi status` → config + connectivity.
+- `snazi check <sender> --channel <id>` → one sender's status.
+- `snazi approve|deny <sender> --channel <id>` → update the list (admin key).
+- `snazi channels list|add` → manage configured channels.
+- `snazi status` → config + connectivity.
 
-See [`packages/imessage-cli/README.md`](packages/imessage-cli/README.md).
+See [`packages/snazi/README.md`](packages/snazi/README.md).
 
 ## The approval flow
 
-1. Agent: `soup-nazi list-new` → sees `+1555… (unknown)`.
+1. Agent: `snazi list-new` → sees `+1555… (unknown)`.
 2. Agent asks Chip: "New messages from +1555…, approve?"
-3. Chip approves in the dashboard (or via `POST /api/senders`).
-4. Agent: `soup-nazi read +1555…` → now the gate opens and text is returned.
+3. Chip approves in the dashboard (or via `snazi approve +1555… --channel imessage`).
+4. Agent: `snazi read +1555…` → now the gate opens and text is returned.
 
 Unknown/denied senders stay opaque. A malicious stranger can't inject content
 into the agent because the agent never sees their words.
@@ -54,8 +57,8 @@ into the agent because the agent never sees their words.
 
 ```
 packages/
-  web/            Next.js list-manager (API + dashboard)  → Vercel
-  imessage-cli/   On-demand Mac wrapper CLI               → Chip's Mac
+  web/      Next.js list-manager (API + dashboard)  → Vercel
+  snazi/    On-demand Mac wrapper CLI               → Chip's Mac
 ```
 
 ## Data model (Supabase, `sna_` prefixed)
@@ -68,7 +71,7 @@ packages/
 
 - Server: see `.env.example`, deploy `packages/web` to Vercel with the four env
   vars set.
-- CLI: run `packages/imessage-cli/install.sh`, fill `~/.soup-nazi/config.json`,
+- CLI: run `packages/snazi/install.sh`, fill `~/.snazi/config.json`,
   grant Full Disk Access.
 
 ## Extending to other channels

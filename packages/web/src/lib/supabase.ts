@@ -22,6 +22,13 @@ export function getSupabase(): SupabaseClient {
 
   cached = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: {
+      // Force every Supabase request to bypass Next.js's Data Cache.
+      // Without this, GET reads (e.g. /api/senders/check) can return stale
+      // approve/deny results — which would defeat the entire security model.
+      fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+        fetch(input, { ...init, cache: 'no-store' }),
+    },
   })
   return cached
 }

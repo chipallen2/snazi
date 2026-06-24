@@ -1,11 +1,11 @@
 {
-  "name": "soup-nazi-imessage-cli",
+  "name": "snazi",
   "version": "0.1.0",
   "description": "On-demand local gate that wraps iMessage. Reveals WHO sent messages; only reveals WHAT for approved senders.",
   "license": "MIT",
   "type": "commonjs",
   "bin": {
-    "soup-nazi": "dist/cli.js"
+    "snazi": "dist/cli.js"
   },
   "files": [
     "dist"
