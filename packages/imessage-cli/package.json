@@ -1,0 +1,25 @@
+{
+  "name": "soup-nazi-imessage-cli",
+  "version": "0.1.0",
+  "description": "On-demand local gate that wraps iMessage. Reveals WHO sent messages; only reveals WHAT for approved senders.",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "soup-nazi": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.3"
+  }
+}
