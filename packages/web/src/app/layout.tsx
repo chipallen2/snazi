@@ -18,10 +18,10 @@ export default function RootLayout({
         <header className="border-b border-neutral-200 bg-white">
           <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
             <Link href="/" className="flex items-baseline gap-2">
-              <span className="text-lg font-bold tracking-tight">
+              <span className="whitespace-nowrap text-lg font-bold tracking-tight">
                 soup-nazi
               </span>
-              <span className="text-sm text-neutral-400">
+              <span className="hidden text-sm text-neutral-400 sm:inline">
                 No messages for you.
               </span>
             </Link>
