@@ -47,6 +47,30 @@ async function getJson(
   return { status: res.status, json }
 }
 
+async function postJson(
+  base: string,
+  token: string,
+  path: string,
+  body: unknown
+): Promise<{ status: number; json: unknown }> {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    ...NO_STORE,
+  })
+  let json: unknown
+  try {
+    json = await res.json()
+  } catch {
+    json = { error: `Non-JSON response: HTTP ${res.status}` }
+  }
+  return { status: res.status, json }
+}
+
 /** Remote equivalent of `snazi list-new`. */
 export async function remoteListNew(
   cfg: Config,
@@ -70,6 +94,38 @@ export async function remoteRead(
     channel
   )}&since=${since}`
   return getJson(url, token, q)
+}
+
+/**
+ * Resolve a name to sender address(es) via the remote serve /resolve endpoint.
+ * Empty/omitted name returns the whole address book (every labelled sender).
+ * Returns address+label+status only — never message text.
+ */
+export async function remoteResolve(
+  cfg: Config,
+  name: string,
+  channel: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const q = `/resolve?name=${encodeURIComponent(name)}&channel=${encodeURIComponent(
+    channel
+  )}`
+  return getJson(url, token, q)
+}
+
+/**
+ * Set a sender's display label via the remote serve POST /label endpoint.
+ * The serve host performs an UPDATE-only write — it cannot create a row or
+ * change approval status, so this can never open the gate.
+ */
+export async function remoteLabel(
+  cfg: Config,
+  sender: string,
+  channel: string,
+  name: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  return postJson(url, token, '/label', { sender, channel, name })
 }
 
 /** Remote equivalent of `snazi check`. */

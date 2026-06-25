@@ -20,7 +20,14 @@ import { loadConfig, saveConfig, CONFIG_PATH } from './config'
 import { checkSender, setSender, ping } from './api'
 import { listInboundSenders, readMessagesFrom } from './chatdb'
 import { startServer } from './server'
-import { remoteListNew, remoteRead, remoteCheck, remoteHealth } from './client'
+import {
+  remoteListNew,
+  remoteRead,
+  remoteCheck,
+  remoteHealth,
+  remoteResolve,
+  remoteLabel,
+} from './client'
 import { installDaemon, LABEL } from './daemon'
 
 const DEFAULT_CHANNEL = 'imessage'
@@ -281,6 +288,45 @@ async function cmdRemoteCheck(args: string[]): Promise<number> {
   }
 }
 
+async function cmdRemoteResolve(args: string[]): Promise<number> {
+  // Name may be empty (-> whole address book). Treat the first positional as
+  // the query; absent -> ''.
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const name = positionals[0] ?? ''
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteResolve(cfg, name, channel)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdRemoteLabel(args: string[]): Promise<number> {
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const target = positionals[0]
+  const name = flag(args, '--name')
+  if (!target || !name) {
+    out({
+      error: 'Usage: snazi remote-label <sender> --name <name> [--channel <id>]',
+    })
+    return 2
+  }
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteLabel(cfg, target, channel, name)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdRemoteStatus(): Promise<number> {
   const cfg = loadConfig()
   try {
@@ -330,6 +376,8 @@ Remote client (the trusted agent side, calls a remote 'snazi serve'):
   snazi remote-list-new [--channel <id>] [--since <min>]  WHO messaged on the remote host + status
   snazi remote-check <sender> --channel <id>            One sender's status (remote)
   snazi remote-read <sender> [--channel <id>] [--since <min>]  Message text (remote) — only if approved
+  snazi remote-resolve [<name>] [--channel <id>]        Resolve a name → sender address(es) (empty = address book)
+  snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
 
 The server manages an approve/deny list only. It stores no messages.
 serve is READ-ONLY (no approve/deny over HTTP), bearer-token protected, and
@@ -376,6 +424,12 @@ async function main(): Promise<void> {
       break
     case 'remote-check':
       code = await cmdRemoteCheck(rest)
+      break
+    case 'remote-resolve':
+      code = await cmdRemoteResolve(rest)
+      break
+    case 'remote-label':
+      code = await cmdRemoteLabel(rest)
       break
     case 'remote-status':
       code = await cmdRemoteStatus()
