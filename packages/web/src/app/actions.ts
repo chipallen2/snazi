@@ -62,8 +62,8 @@ export async function setStatus(
  *
  * Reads channel/sender/label/status from the posted form, upserts via the
  * protected API (admin key injected server-side, never in the browser), then
- * redirects back to /decide with a `done` flag so the page can render a clear
- * confirmation state. Used by the one-tap Allow/Block card Gofer links Chip to.
+ * redirects to the home page with a `decided` flag so it can render a clear
+ * confirmation banner. Used by the one-tap Allow/Block deep-link card.
  */
 export async function decideStatus(formData: FormData) {
   const channel_id = String(formData.get('channel_id') || 'imessage').trim()
@@ -89,10 +89,45 @@ export async function decideStatus(formData: FormData) {
   revalidatePath('/')
   revalidatePath('/decide')
 
-  const params = new URLSearchParams({ channel: channel_id, sender: sender_address })
+  // Send the user back to the home page with a confirmation banner instead of
+  // leaving them on the /decide card with the buttons still showing.
+  const params = new URLSearchParams({
+    decided: status === 'approved' ? 'approved' : 'denied',
+    sender: sender_address,
+  })
   if (label) params.set('label', label)
-  params.set('done', status === 'approved' ? 'allow' : 'block')
-  redirect(`/decide?${params.toString()}`)
+  redirect(`/?${params.toString()}`)
+}
+
+/**
+ * Rename (set/change the friendly label of) an existing sender.
+ *
+ * Reuses the same protected /api/senders upsert path as setStatus, with the
+ * admin key injected server-side only. The current status is passed in so the
+ * rename never accidentally flips approved/denied.
+ */
+export async function renameSender(
+  channel_id: string,
+  sender_address: string,
+  status: SenderStatus,
+  formData: FormData
+) {
+  const label = String(formData.get('label') || '').trim()
+  if (!channel_id || !sender_address) return
+
+  const res = await fetch(`${getBaseUrl()}/api/senders`, {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({
+      channel_id,
+      sender_address,
+      label: label || null,
+      status,
+    }),
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`renameSender failed: ${res.status}`)
+  revalidatePath('/')
 }
 
 export async function removeSender(

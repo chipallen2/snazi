@@ -71,13 +71,11 @@ export default async function Decide({
     channel?: string
     sender?: string
     label?: string
-    done?: string
   }
 }) {
   const channel = (searchParams.channel || 'imessage').trim() || 'imessage'
   const sender = decodeSender(searchParams.sender || '')
   const passedLabel = (searchParams.label || '').trim()
-  const done = searchParams.done
 
   // No sender → friendly guidance, link home.
   if (!sender) {
@@ -107,7 +105,7 @@ export default async function Decide({
         {/* Header */}
         <div className="border-b border-neutral-100 px-6 pb-5 pt-6">
           <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            Should Gofer read messages from
+            Should your assistant read messages from
           </p>
           <h1 className="mt-2 break-words text-2xl font-bold tracking-tight text-neutral-900">
             {primary}
@@ -123,51 +121,46 @@ export default async function Decide({
           </div>
         </div>
 
-        {/* Confirmation banner (after a decision) */}
-        {done === 'allow' && (
-          <div className="border-b border-green-100 bg-green-50 px-6 py-3 text-sm font-medium text-green-800">
-            Allowed — Gofer can now read messages from this person.
-          </div>
-        )}
-        {done === 'block' && (
-          <div className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm font-medium text-red-800">
-            Blocked — Gofer will ignore them.
-          </div>
-        )}
+        {/* Decision form. One form, two submit buttons, plus an optional
+            friendly name. Buttons always show so the decision can be changed;
+            after submitting, decideStatus redirects home with a banner. */}
+        <form action={decideStatus} className="space-y-3 px-6 py-6">
+          <input type="hidden" name="channel_id" value={channel} />
+          <input type="hidden" name="sender_address" value={sender} />
 
-        {/* Decision buttons (always shown so Chip can change his mind) */}
-        <div className="space-y-3 px-6 py-6">
-          <form action={decideStatus}>
-            <input type="hidden" name="channel_id" value={channel} />
-            <input type="hidden" name="sender_address" value={sender} />
-            <input type="hidden" name="label" value={displayLabel} />
-            <input type="hidden" name="status" value="approved" />
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-green-600 px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-green-700 active:bg-green-800"
-            >
-              Allow
-            </button>
-          </form>
+          <label className="block text-xs font-medium text-neutral-600">
+            Name <span className="text-neutral-400">(optional)</span>
+            <input
+              name="label"
+              defaultValue={displayLabel}
+              placeholder="Mom"
+              className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+            />
+          </label>
 
-          <form action={decideStatus}>
-            <input type="hidden" name="channel_id" value={channel} />
-            <input type="hidden" name="sender_address" value={sender} />
-            <input type="hidden" name="label" value={displayLabel} />
-            <input type="hidden" name="status" value="denied" />
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-neutral-800 px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-neutral-900 active:bg-black"
-            >
-              Block
-            </button>
-          </form>
+          <button
+            type="submit"
+            name="status"
+            value="approved"
+            className="w-full rounded-xl bg-green-600 px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-green-700 active:bg-green-800"
+          >
+            Allow
+          </button>
+
+          <button
+            type="submit"
+            name="status"
+            value="denied"
+            className="w-full rounded-xl bg-neutral-800 px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-neutral-900 active:bg-black"
+          >
+            Block
+          </button>
 
           <p className="pt-1 text-center text-xs text-neutral-400">
-            Allow lets Gofer read &amp; summarize their messages. Block (or no
-            decision) means their messages stay private.
+            Allow lets your assistant read &amp; summarize their messages. Block
+            (or no decision) means their messages stay private.
           </p>
-        </div>
+        </form>
       </div>
 
       <div className="text-center">

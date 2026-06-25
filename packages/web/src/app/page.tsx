@@ -1,6 +1,7 @@
 import { getSupabase } from '@/lib/supabase'
 import type { Channel, Sender } from '@/lib/types'
-import { addSender, setStatus, removeSender } from './actions'
+import { addSender, setStatus, removeSender, renameSender } from './actions'
+import { SenderName } from './SenderName'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,33 +25,28 @@ function channelName(channels: Channel[], id: string): string {
 }
 
 /** One person in a list. Label (or address) is primary; a single clear
- *  toggle is the action. Status is implied by which list it's in. */
+ *  toggle is the action. Status is implied by which list it's in. The name
+ *  block supports inline rename and shows which channel the sender is on. */
 function SenderRow({
   s,
   channels,
-  showChannel,
 }: {
   s: Sender
   channels: Channel[]
-  showChannel: boolean
 }) {
   const isApproved = s.status === 'approved'
   const primary = s.label || s.sender_address
-  const sub = s.label ? s.sender_address : null
 
   return (
     <li className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="min-w-0">
-        <div className="truncate font-medium text-neutral-900">{primary}</div>
-        <div className="flex flex-wrap items-center gap-x-2 text-xs text-neutral-500">
-          {sub && <span className="font-mono">{sub}</span>}
-          {showChannel && (
-            <span className="rounded bg-neutral-100 px-1.5 py-0.5">
-              {channelName(channels, s.channel_id)}
-            </span>
-          )}
-        </div>
-      </div>
+      <SenderName
+        channelId={s.channel_id}
+        senderAddress={s.sender_address}
+        label={s.label}
+        status={s.status}
+        channelBadge={channelName(channels, s.channel_id)}
+        renameSender={renameSender}
+      />
 
       <div className="flex shrink-0 items-center gap-2">
         {isApproved ? (
@@ -102,14 +98,12 @@ function SenderList({
   emptyText,
   list,
   channels,
-  showChannel,
 }: {
   title: string
   accent: 'green' | 'red'
   emptyText: string
   list: Sender[]
   channels: Channel[]
-  showChannel: boolean
 }) {
   const dot = accent === 'green' ? 'bg-green-500' : 'bg-red-500'
   return (
@@ -129,12 +123,7 @@ function SenderList({
       ) : (
         <ul className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
           {list.map((s) => (
-            <SenderRow
-              key={s.id}
-              s={s}
-              channels={channels}
-              showChannel={showChannel}
-            />
+            <SenderRow key={s.id} s={s} channels={channels} />
           ))}
         </ul>
       )}
@@ -142,8 +131,69 @@ function SenderList({
   )
 }
 
-export default async function Home() {
+/** A leading "+" in a query string can arrive as a space; restore it so the
+ *  banner shows the same address the deep-link decided on. */
+function decodeSender(raw: string): string {
+  let s = raw || ''
+  if (/^ \d/.test(s)) s = '+' + s.slice(1)
+  return s.trim()
+}
+
+/** Dismissible confirmation banner shown after a /decide deep-link decision
+ *  redirects back here. Dismiss is a plain link back to "/" (clears params). */
+function DecidedBanner({
+  decided,
+  sender,
+  label,
+}: {
+  decided: string
+  sender: string
+  label: string
+}) {
+  const isApproved = decided === 'approved'
+  const who = label || sender
+
+  const cls = isApproved
+    ? 'border-green-200 bg-green-50 text-green-800'
+    : 'border-red-200 bg-red-50 text-red-800'
+
+  return (
+    <div
+      className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-medium ${cls}`}
+    >
+      <span className="min-w-0">
+        {isApproved ? (
+          <>
+            Allowed <span className="font-semibold">{who}</span> — your
+            assistant can now read their messages.
+          </>
+        ) : (
+          <>
+            Blocked <span className="font-semibold">{who}</span> — their
+            messages stay private.
+          </>
+        )}
+      </span>
+      <a
+        href="/"
+        aria-label="Dismiss"
+        className="shrink-0 rounded px-1 text-current opacity-60 hover:opacity-100"
+      >
+        ✕
+      </a>
+    </div>
+  )
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: { decided?: string; sender?: string; label?: string }
+}) {
   const { channels, senders } = await loadData()
+
+  const decided = searchParams?.decided
+  const showBanner = decided === 'approved' || decided === 'denied'
 
   const approved = senders
     .filter((s) => s.status === 'approved')
@@ -161,10 +211,18 @@ export default async function Home() {
 
   return (
     <div className="space-y-7">
+      {showBanner && (
+        <DecidedBanner
+          decided={decided as string}
+          sender={decodeSender(searchParams?.sender || '')}
+          label={(searchParams?.label || '').trim()}
+        />
+      )}
+
       {/* Intro */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
-          Who can reach Gofer?
+          Who can reach your assistant?
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
           Allow the people you trust. Block the ones you don’t. Everyone else
@@ -242,10 +300,9 @@ export default async function Home() {
         <SenderList
           title="Allowed"
           accent="green"
-          emptyText="No one is allowed yet. Add someone above to let them reach Gofer."
+          emptyText="No one is allowed yet. Add someone above to let them reach your assistant."
           list={approved}
           channels={channels}
-          showChannel={multiChannel}
         />
         <SenderList
           title="Blocked"
@@ -253,7 +310,6 @@ export default async function Home() {
           emptyText="No one is blocked."
           list={denied}
           channels={channels}
-          showChannel={multiChannel}
         />
       </div>
     </div>
