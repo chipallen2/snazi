@@ -19,6 +19,9 @@
 import { loadConfig, saveConfig, CONFIG_PATH } from './config'
 import { checkSender, setSender, ping } from './api'
 import { listInboundSenders, readMessagesFrom } from './chatdb'
+import { startServer } from './server'
+import { remoteListNew, remoteRead, remoteCheck, remoteHealth } from './client'
+import { installDaemon, LABEL } from './daemon'
 
 const DEFAULT_CHANNEL = 'imessage'
 
@@ -38,6 +41,19 @@ function flag(args: string[], name: string): string | undefined {
     return args[i + 1]
   }
   return undefined
+}
+
+/** True if a boolean --flag is present. */
+function hasFlag(args: string[], name: string): boolean {
+  return args.includes(name)
+}
+
+function parsePort(args: string[]): number | undefined {
+  const v = flag(args, '--port')
+  if (v == null) return undefined
+  const n = parseInt(v, 10)
+  if (Number.isNaN(n)) return undefined
+  return n
 }
 
 function out(obj: unknown): void {
@@ -166,6 +182,117 @@ async function cmdChannels(args: string[]): Promise<number> {
   return 2
 }
 
+async function cmdServe(args: string[]): Promise<number> {
+  const cfg = loadConfig()
+  const bind = flag(args, '--bind')
+  const port = parsePort(args)
+
+  if (hasFlag(args, '--install-daemon')) {
+    try {
+      const r = installDaemon(cfg, { bind, port })
+      out({
+        ok: true,
+        installed: r.plistPath,
+        label: LABEL,
+        bind: r.bind,
+        port: r.port,
+        node: r.node,
+        cli: r.cli,
+        next_steps: [
+          `launchctl load -w ${r.plistPath}`,
+          `# stop:   launchctl unload -w ${r.plistPath}`,
+          `# Grant Full Disk Access to the node binary: ${r.node}`,
+          `#   System Settings > Privacy & Security > Full Disk Access`,
+        ],
+      })
+      return 0
+    } catch (e) {
+      out({ error: String(e instanceof Error ? e.message : e) })
+      return 1
+    }
+  }
+
+  try {
+    const { server } = await startServer(cfg, { bind, port })
+    // Keep the process alive until signalled; shut down cleanly.
+    return await new Promise<number>((resolve) => {
+      const shutdown = () => {
+        server.close(() => resolve(0))
+      }
+      process.on('SIGINT', shutdown)
+      process.on('SIGTERM', shutdown)
+    })
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdRemoteListNew(args: string[]): Promise<number> {
+  const since = parseSince(args, 60)
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteListNew(cfg, channel, since)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdRemoteRead(args: string[]): Promise<number> {
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const target = positionals[0]
+  if (!target) {
+    out({ error: 'Usage: snazi remote-read <sender> [--channel <id>] [--since <minutes>]' })
+    return 2
+  }
+  const since = parseSince(args, 60)
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteRead(cfg, target, channel, since)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdRemoteCheck(args: string[]): Promise<number> {
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const target = positionals[0]
+  if (!target) {
+    out({ error: 'Usage: snazi remote-check <sender> --channel <id>' })
+    return 2
+  }
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteCheck(cfg, target, channel)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdRemoteStatus(): Promise<number> {
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteHealth(cfg)
+    out({ remoteUrl: cfg.remoteUrl ?? null, health_status: status, health: json })
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdStatus(): Promise<number> {
   const cfg = loadConfig()
   const reachable = await ping(cfg)
@@ -194,7 +321,19 @@ Usage:
   snazi channels add <channel>                          Add a channel (e.g. imessage)
   snazi status                                          Show config + server connectivity
 
-The server manages an approve/deny list only. It stores no messages.`
+Serve mode (least-privilege HTTP gate for a remote agent over a tailnet):
+  snazi serve [--bind <ip>] [--port <n>]                Start read-only HTTP gate (/health,/list-new,/check,/read)
+  snazi serve --install-daemon [--bind <ip>] [--port <n>]  Install the launchd LaunchAgent (RunAtLoad/KeepAlive)
+
+Remote client (the trusted agent side, calls a remote 'snazi serve'):
+  snazi remote-status                                   Probe remoteUrl /health
+  snazi remote-list-new [--channel <id>] [--since <min>]  WHO messaged on the remote host + status
+  snazi remote-check <sender> --channel <id>            One sender's status (remote)
+  snazi remote-read <sender> [--channel <id>] [--since <min>]  Message text (remote) — only if approved
+
+The server manages an approve/deny list only. It stores no messages.
+serve is READ-ONLY (no approve/deny over HTTP), bearer-token protected, and
+binds the tailnet IP (100.x) or 127.0.0.1 — never 0.0.0.0.`
   )
 }
 
@@ -225,6 +364,21 @@ async function main(): Promise<void> {
       break
     case 'status':
       code = await cmdStatus()
+      break
+    case 'serve':
+      code = await cmdServe(rest)
+      break
+    case 'remote-list-new':
+      code = await cmdRemoteListNew(rest)
+      break
+    case 'remote-read':
+      code = await cmdRemoteRead(rest)
+      break
+    case 'remote-check':
+      code = await cmdRemoteCheck(rest)
+      break
+    case 'remote-status':
+      code = await cmdRemoteStatus()
       break
     case undefined:
     case '-h':

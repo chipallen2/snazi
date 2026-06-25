@@ -9,6 +9,23 @@ export interface Config {
   adminKey?: string
   /** Configured channels (e.g. ["imessage"]). */
   channels?: string[]
+
+  // ---- serve mode (HTTP gate for a remote trusted agent over a tailnet) ----
+  /** Bearer token required by every protected `snazi serve` endpoint. */
+  serveToken?: string
+  /**
+   * IP to bind `snazi serve` to. Default: the Tailscale interface IP
+   * (100.64.0.0/10) if present, else 127.0.0.1. NEVER 0.0.0.0.
+   */
+  serveBind?: string
+  /** Port for `snazi serve`. Default 8787. */
+  servePort?: number
+
+  // ---- remote client (the trusted agent side calling a remote serve) ----
+  /** Base URL of a remote `snazi serve` (e.g. http://100.x.y.z:8787). */
+  remoteUrl?: string
+  /** Bearer token for the remote serve (matches its serveToken). */
+  remoteToken?: string
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.snazi')

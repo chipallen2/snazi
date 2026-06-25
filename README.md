@@ -29,9 +29,8 @@ thing: manage an approve/deny list of senders per channel.
   routes using server actions — the admin key never reaches the browser.
 
 ### Part B — Mac wrapper CLI (`packages/snazi`): the LOCAL gate
-A plain on-demand CLI (TypeScript → `dist/`). **Not a daemon. No launchd.** The
-agent runs it on demand on Chip's Mac, where it reads
-`~/Library/Messages/chat.db` (read-only).
+A plain on-demand CLI (TypeScript → `dist/`). The agent runs it on demand on
+Chip's Mac, where it reads `~/Library/Messages/chat.db` (read-only).
 
 - `snazi list-new` → reveals **who** messaged + approval status. Never text.
 - `snazi read <sender>` → checks the server first; prints text **only if
@@ -42,6 +41,28 @@ agent runs it on demand on Chip's Mac, where it reads
 - `snazi status` → config + connectivity.
 
 See [`packages/snazi/README.md`](packages/snazi/README.md).
+
+#### Serve mode — least-privilege HTTP gate over a tailnet (opt-in)
+When the agent runs on a *different* Mac than the one with iMessage, SSH would
+hand it a full shell. Instead, `snazi serve` exposes **only** the read-only
+gated operations over HTTP, reachable only on a private Tailscale tailnet:
+
+- `GET /health` (no auth) · `GET /list-new` · `GET /check` · `GET /read` — all
+  bearer-token protected except `/health`, all read-only.
+- **No `approve`/`deny` over HTTP** (mutations stay CLI/dashboard-only).
+- Binds the **tailnet 100.x IP** (or `127.0.0.1` with `tailscale serve`),
+  **never `0.0.0.0`**. Bearer token (`serveToken`) compared in constant time and
+  never logged. `/read` enforces the **same approved-list gate** as the CLI.
+- Runs as a launchd LaunchAgent via `snazi serve --install-daemon`. The node
+  binary needs **Full Disk Access** to read `chat.db`.
+- Remote agent uses `snazi remote-list-new` / `remote-read` / `remote-check`
+  (config: `remoteUrl`, `remoteToken`) or plain `curl`.
+
+See [`packages/snazi/README.md`](packages/snazi/README.md#serve-mode--least-privilege-http-gate-over-a-tailnet)
+for the full security model, config keys, and FDA setup.
+
+The base CLI still runs **on demand**; serve mode is off by default and
+entirely opt-in. Neither side stores message content.
 
 ## The approval flow
 
