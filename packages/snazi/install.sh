@@ -9,14 +9,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.snazi"
 CONFIG_PATH="$CONFIG_DIR/config.json"
 
-echo "==> Installing dependencies (this compiles better-sqlite3)…"
+echo "==> Installing dependencies (this compiles better-sqlite3)..."
 cd "$SCRIPT_DIR"
 npm install
 
-echo "==> Building TypeScript -> dist/…"
+echo "==> Building TypeScript -> dist/..."
 npm run build
 
-echo "==> Ensuring config dir at $CONFIG_DIR…"
+echo "==> Ensuring config dir at ${CONFIG_DIR}..."
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 
