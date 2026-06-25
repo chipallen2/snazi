@@ -3,12 +3,23 @@ import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
 
-const CHAT_DB = path.join(
+const DEFAULT_CHAT_DB = path.join(
   os.homedir(),
   'Library',
   'Messages',
   'chat.db'
 )
+
+/**
+ * Resolve the chat.db path. Honors the `SNAZI_CHAT_DB` env var (if set and
+ * non-empty) so tests can point at a synthetic DB; otherwise the real
+ * ~/Library/Messages/chat.db. Read per-call so tests can set/unset freely.
+ */
+function getChatDbPath(): string {
+  const override = process.env.SNAZI_CHAT_DB
+  if (override && override.trim() !== '') return override
+  return DEFAULT_CHAT_DB
+}
 
 // Apple Cocoa epoch: 2001-01-01 in unix seconds.
 const APPLE_EPOCH = 978307200
@@ -32,16 +43,21 @@ export interface SenderSummary {
 export interface MessageRow {
   date: string
   text: string
+  /** True when the message was sent BY Chip (outbound), false when received. */
+  from_me: boolean
+  /** Human-friendly direction tag mirroring `from_me`. */
+  direction: 'incoming' | 'outgoing'
 }
 
 function openDb(): Database.Database {
-  if (!fs.existsSync(CHAT_DB)) {
+  const chatDb = getChatDbPath()
+  if (!fs.existsSync(chatDb)) {
     throw new Error(
-      `chat.db not found at ${CHAT_DB}. Is this a Mac with Messages?`
+      `chat.db not found at ${chatDb}. Is this a Mac with Messages?`
     )
   }
   try {
-    return new Database(CHAT_DB, { readonly: true, fileMustExist: true })
+    return new Database(chatDb, { readonly: true, fileMustExist: true })
   } catch (e) {
     throw new Error(
       `Cannot open chat.db (${String(
@@ -81,7 +97,10 @@ export function listInboundSenders(sinceMinutes: number): SenderSummary[] {
 }
 
 /**
- * Return actual message TEXT for ONE sender in the window.
+ * Return actual message TEXT for ONE sender's 1:1 conversation in the window —
+ * BOTH directions (the sender's inbound messages AND Chip's outbound replies),
+ * in chronological order, each tagged with its direction.
+ *
  * Caller MUST have verified the sender is approved before calling this.
  */
 export function readMessagesFrom(
@@ -91,20 +110,32 @@ export function readMessagesFrom(
   const cutoffNs = unixMsToAppleNs(Date.now() - sinceMinutes * 60_000)
   const db = openDb()
   try {
+    // No is_from_me restriction: both inbound (0) and outbound (1) rows for
+    // this handle are returned. In a 1:1 conversation Chip's own replies still
+    // join to the same handle (h.id = sender), so the existing JOIN holds.
     const rows = db
       .prepare(
-        `SELECT m.date AS date, m.text AS text
+        `SELECT m.date AS date, m.text AS text, m.is_from_me AS is_from_me
          FROM message m
          JOIN handle h ON m.handle_id = h.ROWID
-         WHERE m.is_from_me = 0 AND h.id = ? AND m.date > ? AND m.text IS NOT NULL
+         WHERE h.id = ? AND m.date > ? AND m.text IS NOT NULL
          ORDER BY m.date ASC`
       )
-      .all(sender, cutoffNs) as { date: number; text: string }[]
+      .all(sender, cutoffNs) as {
+      date: number
+      text: string
+      is_from_me: number
+    }[]
 
-    return rows.map((r) => ({
-      date: appleNsToDate(r.date).toISOString(),
-      text: r.text,
-    }))
+    return rows.map((r) => {
+      const fromMe = r.is_from_me === 1
+      return {
+        date: appleNsToDate(r.date).toISOString(),
+        text: r.text,
+        from_me: fromMe,
+        direction: fromMe ? ('outgoing' as const) : ('incoming' as const),
+      }
+    })
   } finally {
     db.close()
   }
