@@ -32,6 +32,7 @@ import { normalizeAddress, validateRecipientAddress } from './address'
 import { buildLabelMap, ping, type CheckStatus } from './api'
 import { checkSenderCached, clearCache } from './cache'
 import { resolveReadableAdapter, resolveSendableAdapter, listAdapters, getAdapter } from './channels'
+import { buildContactIndex } from './contacts'
 import { startServer } from './server'
 import {
   remoteListNew,
@@ -96,6 +97,8 @@ async function cmdListNew(args: string[]): Promise<number> {
   }
   const senders = adapter.listInboundSenders(since)
   const labels = await buildLabelMap(cfg, channel)
+  // Local macOS Contacts enrichment (display-only; best-effort, empty on fail).
+  const contacts = buildContactIndex()
 
   const results = []
   for (const s of senders) {
@@ -111,7 +114,10 @@ async function cmdListNew(args: string[]): Promise<number> {
       message_count: s.message_count,
       latest_at: s.latest_at,
       status,
+      // `label` = snazi.dev account name; `contact_name` = local Contacts name.
+      // Both kept as SEPARATE fields; contact_name never affects the gate.
       label: labels.get(normalizeAddress(s.sender)) ?? null,
+      contact_name: contacts.get(s.sender),
     }
     if (checkError) entry.error = checkError
     results.push(entry)
@@ -173,7 +179,9 @@ async function cmdCheck(args: string[]): Promise<number> {
     const status = await checkSenderCached(cfg, channel, target, { fresh })
     const labels = await buildLabelMap(cfg, channel)
     const label = labels.get(target) ?? null
-    out({ channel, sender: target, status, label })
+    // Display-only Contacts name; separate field, never gates reading.
+    const contact_name = buildContactIndex().get(target)
+    out({ channel, sender: target, status, label, contact_name })
     return 0
   } catch (e) {
     out({ error: String(e instanceof Error ? e.message : e) })

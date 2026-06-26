@@ -81,10 +81,10 @@ snazi init && snazi doctor
 | --- | --- |
 | `snazi init [--api-url <url>] [--token <tok>] [--channel <id>]` | Create or update `~/.snazi/config.json`. |
 | `snazi doctor` | Diagnose Node, config, connectivity, and channel access. |
-| `snazi list-new [--channel <id>] [--since <min>] [--fresh]` | Distinct inbound senders, counts, timestamps, approval status, and display label. **No text.** Default window 60 min. |
+| `snazi list-new [--channel <id>] [--since <min>] [--fresh]` | Distinct inbound senders, counts, timestamps, approval status, display label, and local Contacts `contact_name`. **No text.** Default window 60 min. |
 | `snazi read <sender> [--channel <id>] [--since <min>] [--fresh]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
 | `snazi send <recipient> --text <message> [--channel <id>]` | Send a message. **Never gated** — you can always send to anyone. |
-| `snazi check <sender> --channel <id> [--fresh]` | One sender's approval status and display label (`approved`/`denied`/`unknown`). |
+| `snazi check <sender> --channel <id> [--fresh]` | One sender's approval status, display label, and local Contacts `contact_name` (`approved`/`denied`/`unknown`). |
 | `snazi channels list` | Configured channels plus adapter availability on this machine. |
 | `snazi channels add <channel>` | Add a channel (e.g. `snazi channels add imessage`). |
 | `snazi cache clear` | Drop cached approval statuses (force fresh checks after a revocation). |
@@ -110,7 +110,8 @@ right after you revoke someone.
 snazi list-new --since 180
 # [
 #   { "sender": "+15551234567", "message_count": 3,
-#     "latest_at": "2026-06-23T22:10:04.000Z", "status": "unknown", "label": null }
+#     "latest_at": "2026-06-23T22:10:04.000Z", "status": "unknown",
+#     "label": null, "contact_name": "Jenny Tutone" }
 # ]
 
 snazi read "+15551234567"
@@ -163,16 +164,41 @@ privilege.
 | Method + path | Auth | Returns |
 | --- | --- | --- |
 | `GET /health` | none | `{ ok: true, version }` — connectivity probe only, no data. |
-| `GET /list-new?channel=imessage&since=<min>` | bearer | `{ channel, since_minutes, senders: [{ sender, message_count, latest_at, status, label }] }`. On check failure: `status` is `unknown` and an `error` field describes the failure. **Never message text.** |
-| `GET /check?sender=<addr>&channel=imessage` | bearer | `{ channel, sender, status, label }`. On check failure: HTTP 502 with `{ error }`. |
-| `GET /read?sender=<addr>&channel=imessage&since=<min>` | bearer | `{ sender, channel, status, since_minutes, messages }` **only if approved**; otherwise `403 { error: "Sender not approved. No messages for you.", status }`. On check failure: HTTP 502 with `{ error }`. |
+| `GET /list-new?channel=imessage&since=<min>` | bearer | `{ channel, since_minutes, senders: [{ sender, message_count, latest_at, status, label, contact_name }] }`. On check failure: `status` is `unknown` and an `error` field describes the failure. **Never message text.** |
+| `GET /check?sender=<addr>&channel=imessage` | bearer | `{ channel, sender, status, label, contact_name }`. On check failure: HTTP 502 with `{ error }`. |
+| `GET /read?sender=<addr>&channel=imessage&since=<min>` | bearer | `{ sender, channel, status, since_minutes, contact_name, messages }` **only if approved**; otherwise `403 { error: "Sender not approved. No messages for you.", status }`. On check failure: HTTP 502 with `{ error }`. |
 | `POST /send` body `{ recipient, channel, text }` | bearer | Send an outbound message. **Never gated** — you can always send to anyone. Returns `{ ok: true, channel, recipient }` on success. |
-| `GET /resolve?name=<q>&channel=imessage` | bearer | `{ channel, query, matches: [{ sender_address, label, status }] }`. Empty/omitted `name` returns every labelled sender. **Never message text.** |
+| `GET /resolve?name=<q>&channel=imessage` | bearer | `{ channel, query, matches: [{ sender_address, label, status, contact_name }] }`. Empty/omitted `name` returns every labelled sender. **Never message text.** |
 | `POST /label` body `{ sender, channel, name }` | bearer | Set a sender's display label via an UPDATE-only web endpoint. **Cannot create a row or change `status`**, so it cannot open the gate. 404 if the sender is not on the list yet. |
 
 There is **no `approve`/`deny` over HTTP**. Approvals stay dashboard/`/decide`-only.
 `POST /label` is the only write — label metadata only. Unknown path → `404`. Bad
 params → `400`. Unsupported methods → `405`.
+
+### `contact_name` — local macOS Contacts enrichment (display only)
+
+`/list-new`, `/check`, `/resolve` (and the `200` body of `/read`) include a
+`contact_name` for each sender: the matching name from the serve host's **local
+macOS Contacts** (AddressBook), looked up by phone/email. It is attached for
+**every** sender **regardless of approval status**, so you can see *who* an
+`unknown`/`denied` caller is without reading their messages.
+
+- **Display-only, never a gate.** `contact_name` **never** affects `status`,
+  approval, or the read gate. Reading is still allowed **solely** when
+  `status === 'approved'` — a known contact name does **not** open the gate.
+- **Separate from `label`.** `label` = the name you set on your snazi.dev
+  account (privileged). `contact_name` = read locally from macOS Contacts. Both
+  fields are kept separate in the JSON; `null` when there's no match.
+- **Untrusted text.** A contact name is stripped of control characters and
+  length-capped (≤64) before it's ever returned — it can't carry a
+  terminal/log-injection payload.
+- **Degrades silently.** If Contacts is unreadable (no permission, non-macOS,
+  native module missing), `contact_name` is simply `null` and nothing breaks.
+
+**Contacts access on the serve host.** Reading the AddressBook DB needs the node
+binary to have **Contacts** access (or **Full Disk Access**, which already
+covers the AddressBook database). Full Disk Access is the simplest option since
+you already grant it for iMessage; without it `contact_name` just stays `null`.
 
 ### Security model
 

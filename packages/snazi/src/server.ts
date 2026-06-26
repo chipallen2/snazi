@@ -31,6 +31,25 @@ import { checkSenderCached } from './cache'
 import { resolveReadableAdapter, resolveSendableAdapter } from './channels'
 import { normalizeAddress, validateRecipientAddress } from './address'
 import { MAX_MESSAGE_LEN } from './imessage-send'
+import { buildContactIndex, type ContactIndex } from './contacts'
+
+/**
+ * Build the macOS Contacts index for ONE request, best-effort. NEVER throws:
+ * any failure (no DB, no permission, non-macOS, better-sqlite3 missing) yields
+ * an empty index so enrichment degrades to `contact_name: null` and the gate
+ * keeps working with zero Contacts access.
+ *
+ * SECURITY: the returned name is DISPLAY-ONLY. It is never consulted by the
+ * read gate (handleRead checks `status === 'approved'` and nothing else) and
+ * is already sanitized (control-char-stripped + length-capped) by contacts.ts.
+ */
+function contactIndexForRequest(): ContactIndex {
+  try {
+    return buildContactIndex()
+  } catch {
+    return { size: 0, get: () => null }
+  }
+}
 
 // Read version without importing JSON at compile time (keeps build simple).
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -226,6 +245,8 @@ async function handleListNew(
   const senders = adapter.listInboundSenders(since)
   // One list fetch -> address->label map (best-effort; null on any failure).
   const labels = await buildLabelMap(cfg, channel)
+  // Build the Contacts index ONCE per request (best-effort, empty on failure).
+  const contacts = contactIndexForRequest()
   const results = []
   for (const s of senders) {
     let status: CheckStatus = 'unknown'
@@ -240,7 +261,12 @@ async function handleListNew(
       message_count: s.message_count,
       latest_at: s.latest_at,
       status,
+      // `label` = user's snazi.dev account-set name (privileged display).
       label: labels.get(normalizeAddress(s.sender)) ?? null,
+      // `contact_name` = local macOS Contacts name (display-only metadata).
+      // Kept SEPARATE from `label`; included regardless of approval status.
+      // It NEVER affects `status` or the read gate.
+      contact_name: contacts.get(s.sender),
     }
     if (checkError) entry.error = checkError
     results.push(entry)
@@ -272,15 +298,20 @@ async function handleRead(
     }
   }
   if (status !== 'approved') {
+    // GATE: reading is denied SOLELY on approval status. `contact_name` is
+    // deliberately NOT consulted here — a known Contacts name must never open
+    // the gate. We don't even compute it on the denied path.
     return {
       status: 403,
       body: { error: 'Sender not approved. No messages for you.', status },
     }
   }
   const messages = adapter.readMessagesFrom(sender, since)
+  // Gate already passed; attach display-only Contacts name (best-effort).
+  const contact_name = contactIndexForRequest().get(sender)
   return {
     status: 200,
-    body: { sender, channel, status, since_minutes: since, messages },
+    body: { sender, channel, status, since_minutes: since, contact_name, messages },
   }
 }
 
@@ -302,7 +333,10 @@ async function handleCheck(
   // Best-effort label lookup for this one address (display only).
   const labels = await buildLabelMap(cfg, channel)
   const label = labels.get(sender) ?? null
-  return { status: 200, body: { channel, sender, status, label } }
+  // Display-only Contacts name. Kept separate from `label`; included no matter
+  // the approval status. It does NOT (and must not) affect `status`.
+  const contact_name = contactIndexForRequest().get(sender)
+  return { status: 200, body: { channel, sender, status, label, contact_name } }
 }
 
 /**
@@ -320,6 +354,8 @@ async function handleResolve(
   const query = parseName(url.searchParams.get('name'), true)
   const needle = query.toLowerCase()
   const senders = await listSenders(cfg, channel)
+  // Build the Contacts index ONCE for this request (best-effort, empty on fail).
+  const contacts = contactIndexForRequest()
   const matches = senders
     .filter((s: SenderRecord) => {
       if (s.label == null || s.label === '') return false
@@ -330,6 +366,8 @@ async function handleResolve(
       sender_address: s.sender_address,
       label: s.label,
       status: s.status,
+      // Display-only macOS Contacts name; separate from `label`, never gates.
+      contact_name: contacts.get(s.sender_address),
     }))
   return { status: 200, body: { channel, query, matches } }
 }
