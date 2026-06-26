@@ -176,7 +176,7 @@ GitHub Actions handles build, test, and publishing (see `.github/workflows/`):
   (Node 18 + 20) and `web`. A normal commit to `main` **never** publishes.
 - **`release.yml`** runs only when a `v*` tag is pushed — it re-tests, verifies
   the tag matches `package.json`, runs `npm publish --provenance`, and cuts a
-  GitHub Release.
+  GitHub Release. Auth is **npm Trusted Publishing (OIDC)** — no stored token.
 
 Cutting a release (from `packages/snazi`, on a clean `main`):
 
@@ -188,7 +188,16 @@ npm run release:patch   # 0.1.0 -> 0.1.1  (or release:minor / release:major)
 That bumps the version, commits, creates the `vX.Y.Z` tag, and pushes both — the
 tag push triggers `release.yml`, which publishes to npm. No manual `npm publish`.
 
-**One-time setup:** add an npm **automation** token as the `NPM_TOKEN` repo
-secret (`gh secret set NPM_TOKEN`). Publishing also requires the npm package
-setting to allow GitHub Actions as a trusted publisher / the token to have
-publish rights.
+**One-time setup (Trusted Publishing).** npm cannot publish a brand-new package
+over OIDC, so:
+
+1. Publish the first version manually (from a clean `main`, logged in to npm):
+   ```bash
+   cd packages/snazi && npm publish --access public
+   ```
+2. On npmjs.com → the package → **Settings → Trusted Publisher**, add a GitHub
+   Actions publisher: org/user `chipallen2`, repository `snazi`, workflow
+   filename `release.yml`.
+
+After that, every `npm run release:*` publishes automatically via OIDC — no
+`NPM_TOKEN` secret to create, store, or rotate.
