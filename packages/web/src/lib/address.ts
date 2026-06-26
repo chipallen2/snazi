@@ -54,3 +54,37 @@ export function normalizeAddress(raw: string | null | undefined): string {
 function defaultCountryCode(): string {
   return (process.env.SNAZI_DEFAULT_COUNTRY_CODE ?? '1').replace(/\D/g, '')
 }
+
+/**
+ * Validate and normalize a recipient address for outbound send.
+ * Phone numbers must normalize to E.164; emails must look like emails.
+ * Throws with a clear message on invalid input.
+ */
+export function validateRecipientAddress(raw: string | null | undefined): string {
+  const original = String(raw ?? '').trim()
+  if (!original) {
+    throw new Error('Missing recipient.')
+  }
+  const normalized = normalizeAddress(raw)
+  if (!normalized) {
+    throw new Error('Missing recipient.')
+  }
+  if (normalized.includes('@')) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      throw new Error('Invalid email address.')
+    }
+    return normalized
+  }
+  if (!normalized.startsWith('+')) {
+    throw new Error(
+      'Invalid recipient. Use a phone number (+15551234567) or email address.'
+    )
+  }
+  // E.164: + followed by 7–15 digits (country code never starts with 0).
+  if (!/^\+[1-9]\d{6,14}$/.test(normalized)) {
+    throw new Error(
+      'Invalid phone number. Use E.164 (+15551234567) or a 10-digit national number.'
+    )
+  }
+  return normalized
+}

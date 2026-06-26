@@ -43,4 +43,14 @@ export interface ChannelAdapter {
   listInboundSenders(sinceMinutes: number): SenderSummary[]
   /** Messages for ONE sender. Caller MUST have verified approval first. */
   readMessagesFrom(sender: string, sinceMinutes: number): MessageRow[]
+  /**
+   * Can this channel send outbound messages on THIS machine right now?
+   * Omit when the channel has no send path.
+   */
+  sendAvailability?(): ChannelAvailability
+  /**
+   * Send a message to a recipient. NEVER gated by the approval list — the
+   * soup nazi only blocks reading. Throws on failure.
+   */
+  sendMessage?(recipient: string, text: string): void
 }

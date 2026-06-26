@@ -66,4 +66,33 @@ export function resolveReadableAdapter(channel: string): ResolvedAdapter {
   return { adapter }
 }
 
+/**
+ * Resolve a channel id to an adapter that can SEND on this host.
+ * Never throws. Sending is never gated by the approval list.
+ */
+export function resolveSendableAdapter(channel: string): ResolvedAdapter {
+  const adapter = getAdapter(channel)
+  if (!adapter) {
+    const known = listAdapters()
+      .map((a) => a.id)
+      .join(', ')
+    return {
+      error: `Unknown channel '${channel}'. Known channels: ${known || '(none)'}.`,
+    }
+  }
+  if (!adapter.sendMessage) {
+    return { error: `Channel '${channel}' does not support sending.` }
+  }
+  const availability = adapter.sendAvailability?.() ?? { available: true }
+  if (!availability.available) {
+    const detail = availability.detail ? ` ${availability.detail}` : ''
+    return {
+      error: `Channel '${channel}' cannot send on this machine: ${
+        availability.reason ?? 'unavailable'
+      }.${detail}`,
+    }
+  }
+  return { adapter }
+}
+
 export type { ChannelAdapter, ChannelAvailability, SenderSummary, MessageRow } from './types'

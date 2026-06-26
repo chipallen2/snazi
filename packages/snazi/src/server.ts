@@ -13,6 +13,7 @@
  *   GET  /check?sender&channel       -> { status, label }           (bearer)
  *   GET  /resolve?name&channel       -> name->address address book   (bearer)
  *   POST /label {sender,channel,name}-> set a sender's display label (bearer)
+ *   POST /send  {recipient,channel,text} -> send a message (bearer, never gated)
  *
  * It REUSES the same gate (api.ts) and the same DB reader (chatdb.ts) as the
  * CLI. There is no approve/deny here — APPROVAL mutations stay CLI/dashboard-
@@ -27,8 +28,9 @@ import * as os from 'os'
 import type { Config } from './config'
 import { listSenders, setLabel, buildLabelMap, type CheckStatus, type SenderRecord } from './api'
 import { checkSenderCached } from './cache'
-import { resolveReadableAdapter } from './channels'
-import { normalizeAddress } from './address'
+import { resolveReadableAdapter, resolveSendableAdapter } from './channels'
+import { normalizeAddress, validateRecipientAddress } from './address'
+import { MAX_MESSAGE_LEN } from './imessage-send'
 
 // Read version without importing JSON at compile time (keeps build simple).
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -58,6 +60,8 @@ const SENDER_RE = /^[A-Za-z0-9_.+@-]+$/
 // packages/web/src/app/api/senders/label/route.ts (MAX_LABEL_LEN, LABEL_CTRL_RE).
 // eslint-disable-next-line no-control-regex
 const NAME_CTRL_RE = /[\u0000-\u001f\u007f]/
+// eslint-disable-next-line no-control-regex
+const TEXT_CTRL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
 
 export interface ServeOptions {
   bind?: string
@@ -173,6 +177,22 @@ function parseName(v: string | null | undefined, allowEmpty = false): string {
   if (n.length > MAX_NAME_LEN) throw new Error('Name too long.')
   if (NAME_CTRL_RE.test(n)) throw new Error('Invalid name.')
   return n
+}
+
+function parseRecipient(v: string | null): string {
+  const raw = (v ?? '').trim()
+  if (!raw) throw new Error('Missing recipient.')
+  if (raw.length > MAX_SENDER_LEN) throw new Error('Recipient too long.')
+  if (!SENDER_RE.test(raw)) throw new Error('Invalid recipient.')
+  return validateRecipientAddress(raw)
+}
+
+function parseText(v: string | null | undefined): string {
+  const t = String(v ?? '')
+  if (!t.trim()) throw new Error('Missing text.')
+  if (t.length > MAX_MESSAGE_LEN) throw new Error('Text too long.')
+  if (TEXT_CTRL_RE.test(t)) throw new Error('Invalid text.')
+  return t
 }
 
 /** Read a request body with a hard size cap (fails closed on overflow). */
@@ -347,6 +367,40 @@ async function handleLabel(
   }
 }
 
+/**
+ * POST /send  body: { recipient, channel, text }
+ * Sends an outbound message. NEVER gated by the approval list — the soup nazi
+ * only blocks reading.
+ */
+async function handleSend(
+  _cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as { recipient?: unknown; channel?: unknown; text?: unknown }
+  const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
+  const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
+  const text = parseText(typeof b.text === 'string' ? b.text : null)
+  const { adapter, error } = resolveSendableAdapter(channel)
+  if (!adapter?.sendMessage) {
+    return { status: 501, body: { error } }
+  }
+  try {
+    adapter.sendMessage(recipient, text)
+    return { status: 200, body: { ok: true, channel, recipient } }
+  } catch (e) {
+    return {
+      status: 502,
+      body: { error: String(e instanceof Error ? e.message : e) },
+    }
+  }
+}
+
 /** Build (but do not start) the HTTP server. Exposed for tests. */
 export function createServer(cfg: Config): http.Server {
   const token = cfg.serveToken ?? ''
@@ -364,23 +418,25 @@ export function createServer(cfg: Config): http.Server {
           return sendJson(res, 200, { ok: true, version: VERSION })
         }
 
-        // Only GET (reads) and POST /label (the single non-privileged write)
-        // are allowed on this surface.
+        // Only GET (reads) and POST /label, POST /send are allowed on this surface.
         if (method !== 'GET' && method !== 'POST') {
           return sendJson(res, 405, { error: 'Method not allowed.' })
         }
 
-        // Everything past /health requires a valid bearer token — including the
-        // POST /label write.
+        // Everything past /health requires a valid bearer token — including writes.
         if (!bearerOk(req.headers['authorization'], token)) {
           res.setHeader('www-authenticate', 'Bearer')
           return sendJson(res, 401, { error: 'Unauthorized.' })
         }
 
         if (method === 'POST') {
+          const rawBody = await readBody(req, MAX_BODY_BYTES)
           if (pathname === '/label') {
-            const rawBody = await readBody(req, MAX_BODY_BYTES)
             const r = await handleLabel(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
+          if (pathname === '/send') {
+            const r = await handleSend(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
           return sendJson(res, 404, { error: 'Not found.' })
@@ -443,11 +499,11 @@ export async function startServer(
   console.error(
     JSON.stringify({
       ok: true,
-      msg: 'snazi serve listening (read-only gate)',
+      msg: 'snazi serve listening (gated read + ungated send)',
       bind,
       port,
       version: VERSION,
-      surface: ['/health', '/list-new', '/check', '/read', '/resolve', 'POST /label'],
+      surface: ['/health', '/list-new', '/check', '/read', '/resolve', 'POST /label', 'POST /send'],
       reachable_on:
         bind === '127.0.0.1'
           ? 'loopback only (front with `tailscale serve` for tailnet access)'

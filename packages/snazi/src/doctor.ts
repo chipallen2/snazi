@@ -73,8 +73,12 @@ export async function runDoctor(): Promise<{ code: number; report: unknown }> {
       }
     }
     const av = adapter.availability()
+    const sendAv = adapter.sendAvailability?.()
     if (!av.available) {
       warnings.push(`Channel '${id}' is not readable locally: ${av.reason}`)
+    }
+    if (adapter.sendMessage && sendAv && !sendAv.available) {
+      warnings.push(`Channel '${id}' cannot send locally: ${sendAv.reason}`)
     }
     return {
       id,
@@ -82,6 +86,8 @@ export async function runDoctor(): Promise<{ code: number; report: unknown }> {
       available: av.available,
       reason: av.reason ?? null,
       detail: av.detail ?? null,
+      send_available: sendAv?.available ?? null,
+      send_reason: sendAv?.reason ?? null,
     }
   })
 

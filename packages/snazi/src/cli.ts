@@ -9,6 +9,7 @@
  * - doctor   : diagnose Node, config, connectivity, and per-channel access.
  * - list-new : reveals WHO sent recent messages + their approval status. Never WHAT.
  * - read     : reveals message TEXT for ONE sender, but ONLY if approved by the server.
+ * - send     : sends a message to ANY recipient (never gated).
  * - check    : prints a single sender's approval status.
  * - channels : list/add configured channels + show adapter availability here.
  * - status   : prints config + platform + server connectivity.
@@ -27,10 +28,10 @@
  * database and printed only when the gate opens.
  */
 import { loadConfig, saveConfig, readConfigIfPresent, CONFIG_PATH } from './config'
-import { normalizeAddress } from './address'
+import { normalizeAddress, validateRecipientAddress } from './address'
 import { buildLabelMap, ping, type CheckStatus } from './api'
 import { checkSenderCached, clearCache } from './cache'
-import { resolveReadableAdapter, listAdapters, getAdapter } from './channels'
+import { resolveReadableAdapter, resolveSendableAdapter, listAdapters, getAdapter } from './channels'
 import { startServer } from './server'
 import {
   remoteListNew,
@@ -39,6 +40,7 @@ import {
   remoteHealth,
   remoteResolve,
   remoteLabel,
+  remoteSend,
 } from './client'
 import { installDaemon, LABEL } from './daemon'
 import { runInit } from './init'
@@ -172,6 +174,42 @@ async function cmdCheck(args: string[]): Promise<number> {
     const labels = await buildLabelMap(cfg, channel)
     const label = labels.get(target) ?? null
     out({ channel, sender: target, status, label })
+    return 0
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
+async function cmdSend(args: string[]): Promise<number> {
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const rawRecipient = positionals[0]
+  const text = flag(args, '--text')
+  if (!rawRecipient || text == null) {
+    out({
+      error: 'Usage: snazi send <recipient> --text <message> [--channel <id>]',
+    })
+    return 2
+  }
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+
+  let target: string
+  try {
+    target = validateRecipientAddress(rawRecipient)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 2
+  }
+
+  // Sending is NEVER gated — the soup nazi only blocks reading.
+  const { adapter, error } = resolveSendableAdapter(channel)
+  if (!adapter?.sendMessage) {
+    out({ error })
+    return 1
+  }
+  try {
+    adapter.sendMessage(target, text)
+    out({ ok: true, channel, recipient: target })
     return 0
   } catch (e) {
     out({ error: String(e instanceof Error ? e.message : e) })
@@ -401,6 +439,35 @@ async function cmdRemoteLabel(args: string[]): Promise<number> {
   }
 }
 
+async function cmdRemoteSend(args: string[]): Promise<number> {
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const rawRecipient = positionals[0]
+  const text = flag(args, '--text')
+  if (!rawRecipient || text == null) {
+    out({
+      error: 'Usage: snazi remote-send <recipient> --text <message> [--channel <id>]',
+    })
+    return 2
+  }
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  let target: string
+  try {
+    target = validateRecipientAddress(rawRecipient)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 2
+  }
+  const cfg = loadConfig()
+  try {
+    const { status, json } = await remoteSend(cfg, target, channel, text)
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdRemoteStatus(): Promise<number> {
   const cfg = loadConfig()
   try {
@@ -440,6 +507,7 @@ Setup:
 Usage:
   snazi list-new [--channel <id>] [--since <minutes>]   Show WHO messaged + approval status (default 60m)
   snazi read <sender> [--channel <id>] [--since <min>]  Show message text — only if sender is approved
+  snazi send <recipient> --text <message> [--channel <id>]  Send a message (never gated)
   snazi check <sender> --channel <id>                   Print one sender's approval status
   snazi channels list                                   List configured channels + adapter availability here
   snazi channels add <channel>                          Add a channel (e.g. imessage)
@@ -455,7 +523,7 @@ Approvals are READ-ONLY here: approve/deny a sender in the web dashboard or via
 a signed /decide link. The config token is a per-account READ token.
 
 Serve mode (least-privilege HTTP gate for a remote agent over a tailnet):
-  snazi serve [--bind <ip>] [--port <n>]                Start read-only HTTP gate (/health,/list-new,/check,/read)
+  snazi serve [--bind <ip>] [--port <n>]                Start HTTP gate (/health,/list-new,/check,/read,POST /send)
   snazi serve --install-daemon [--bind <ip>] [--port <n>]  Install the launchd LaunchAgent (RunAtLoad/KeepAlive)
 
 Remote client (the trusted agent side, calls a remote 'snazi serve'):
@@ -463,12 +531,13 @@ Remote client (the trusted agent side, calls a remote 'snazi serve'):
   snazi remote-list-new [--channel <id>] [--since <min>]  WHO messaged on the remote host + status
   snazi remote-check <sender> --channel <id>            One sender's status (remote)
   snazi remote-read <sender> [--channel <id>] [--since <min>]  Message text (remote) — only if approved
+  snazi remote-send <recipient> --text <msg> [--channel <id>]  Send a message (remote; never gated)
   snazi remote-resolve [<name>] [--channel <id>]        Resolve a name → sender address(es) (empty = address book)
   snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
 
 The server manages an approve/deny list only. It stores no messages.
-serve is READ-ONLY (no approve/deny over HTTP), bearer-token protected, and
-binds the tailnet IP (100.x) or 127.0.0.1 — never 0.0.0.0.`
+Reading is gated; sending is not. serve binds the tailnet IP (100.x) or
+127.0.0.1 — never 0.0.0.0.`
   )
 }
 
@@ -491,6 +560,9 @@ async function main(): Promise<void> {
     case 'read':
       code = await cmdRead(rest)
       break
+    case 'send':
+      code = await cmdSend(rest)
+      break
     case 'check':
       code = await cmdCheck(rest)
       break
@@ -511,6 +583,9 @@ async function main(): Promise<void> {
       break
     case 'remote-read':
       code = await cmdRemoteRead(rest)
+      break
+    case 'remote-send':
+      code = await cmdRemoteSend(rest)
       break
     case 'remote-check':
       code = await cmdRemoteCheck(rest)

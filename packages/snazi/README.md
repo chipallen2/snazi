@@ -83,6 +83,7 @@ snazi init && snazi doctor
 | `snazi doctor` | Diagnose Node, config, connectivity, and channel access. |
 | `snazi list-new [--channel <id>] [--since <min>] [--fresh]` | Distinct inbound senders, counts, timestamps, approval status, and display label. **No text.** Default window 60 min. |
 | `snazi read <sender> [--channel <id>] [--since <min>] [--fresh]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
+| `snazi send <recipient> --text <message> [--channel <id>]` | Send a message. **Never gated** — you can always send to anyone. |
 | `snazi check <sender> --channel <id> [--fresh]` | One sender's approval status and display label (`approved`/`denied`/`unknown`). |
 | `snazi channels list` | Configured channels plus adapter availability on this machine. |
 | `snazi channels add <channel>` | Add a channel (e.g. `snazi channels add imessage`). |
@@ -94,6 +95,7 @@ snazi init && snazi doctor
 | `snazi remote-list-new [--channel <id>] [--since <min>]` | WHO messaged on the remote host + status + label. |
 | `snazi remote-check <sender> --channel <id>` | One sender's status and label, via remote serve. |
 | `snazi remote-read <sender> [--channel <id>] [--since <min>]` | Message text via remote serve — only if approved. |
+| `snazi remote-send <recipient> --text <message> [--channel <id>]` | Send a message via remote serve — never gated. |
 | `snazi remote-resolve [<name>] --channel <id>` | Resolve a name → sender address(es). Empty name = full address book. |
 | `snazi remote-label <sender> --name <name> --channel <id>` | Set a sender's display label (UPDATE-only; cannot open the gate). |
 
@@ -123,6 +125,9 @@ curl -s -H "x-api-key: $READ_TOKEN" \
 snazi read "+15551234567"
 # { "sender": "+15551234567", "status": "approved", "since_minutes": 60,
 #   "messages": [ { "date": "...", "text": "hey are we still on for lunch?" } ] }
+
+snazi send "+15551234567" --text "On my way!"
+# { "ok": true, "channel": "imessage", "recipient": "+15551234567" }
 ```
 
 ## Serve mode — least-privilege HTTP gate over a tailnet
@@ -143,6 +148,7 @@ privilege.
                                                 │  /read      (bearer)  │
                                                 │  /resolve   (bearer)  │
                                                 │  POST /label (bearer) │
+                                                │  POST /send  (bearer) │
                                                 │     │                 │
                                                 │     ▼ same gate (api)  │
                                                 │  approved? → text      │
@@ -160,6 +166,7 @@ privilege.
 | `GET /list-new?channel=imessage&since=<min>` | bearer | `{ channel, since_minutes, senders: [{ sender, message_count, latest_at, status, label }] }`. On check failure: `status` is `unknown` and an `error` field describes the failure. **Never message text.** |
 | `GET /check?sender=<addr>&channel=imessage` | bearer | `{ channel, sender, status, label }`. On check failure: HTTP 502 with `{ error }`. |
 | `GET /read?sender=<addr>&channel=imessage&since=<min>` | bearer | `{ sender, channel, status, since_minutes, messages }` **only if approved**; otherwise `403 { error: "Sender not approved. No messages for you.", status }`. On check failure: HTTP 502 with `{ error }`. |
+| `POST /send` body `{ recipient, channel, text }` | bearer | Send an outbound message. **Never gated** — you can always send to anyone. Returns `{ ok: true, channel, recipient }` on success. |
 | `GET /resolve?name=<q>&channel=imessage` | bearer | `{ channel, query, matches: [{ sender_address, label, status }] }`. Empty/omitted `name` returns every labelled sender. **Never message text.** |
 | `POST /label` body `{ sender, channel, name }` | bearer | Set a sender's display label via an UPDATE-only web endpoint. **Cannot create a row or change `status`**, so it cannot open the gate. 404 if the sender is not on the list yet. |
 
@@ -179,9 +186,10 @@ params → `400`. Unsupported methods → `405`.
 - **Read-only surface.** No shell, no arbitrary file reads, no path traversal —
   only the same channel adapters the CLI uses. Params are validated
   (`channel`/`sender` charset-checked, `since` clamped to ≤ 7 days).
-- **Same gate.** `/read` calls the server list API (`api.ts`) *before* touching
-  any text — identical to `snazi read`. The gate is the product; it is not
-  bypassed.
+- **Same gate for reading.** `/read` calls the server list API (`api.ts`) *before*
+  touching any text — identical to `snazi read`. The gate is the product; it is
+  not bypassed. **Sending is never gated** — `/send` and `snazi send` work for
+  any recipient.
 - **No storage.** Content is read live from `chat.db` and returned in the
   response only. Nothing is persisted on either side.
 
@@ -240,6 +248,7 @@ snazi remote-status
 snazi remote-list-new --since 120
 snazi remote-check "+15551234567" --channel imessage
 snazi remote-read  "+15551234567"
+snazi remote-send  "+15551234567" --text "On my way!"
 snazi remote-resolve "Dan" --channel imessage
 snazi remote-label "+15551234567" --name "Dan" --channel imessage
 ```
@@ -257,6 +266,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "$BASE/read?sender=%2B15551234567&chan
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/resolve?name=Dan&channel=imessage"
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"sender":"+15551234567","channel":"imessage","name":"Dan"}' "$BASE/label"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"recipient":"+15551234567","channel":"imessage","text":"On my way!"}' "$BASE/send"
 # Unknown/denied sender on /read → 403 { "error": "Sender not approved. No messages for you.", ... }
 ```
 

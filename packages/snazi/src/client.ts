@@ -141,6 +141,17 @@ export async function remoteCheck(
   return getJson(url, token, q)
 }
 
+/** Remote equivalent of `snazi send` (never gated). */
+export async function remoteSend(
+  cfg: Config,
+  recipient: string,
+  channel: string,
+  text: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  return postJson(url, token, '/send', { recipient, channel, text })
+}
+
 /** Connectivity probe against a remote serve `/health`. */
 export async function remoteHealth(
   cfg: Config

@@ -244,6 +244,42 @@ async function main() {
     'POST /label rejects body >4KB (size cap fails closed)'
   )
 
+  // --- POST /send: validation (never hits approval gate) ---
+  r = await req(serve, {
+    method: 'POST',
+    path: '/send',
+    token: TOKEN,
+    body: { recipient: '+15553330000', channel: 'imessage', text: '' },
+  })
+  check(r.status === 400, 'POST /send rejects empty text')
+
+  r = await req(serve, {
+    method: 'POST',
+    path: '/send',
+    token: TOKEN,
+    body: { recipient: 'bad sender!', channel: 'imessage', text: 'hi' },
+  })
+  check(r.status === 400, 'POST /send rejects malformed recipient')
+
+  r = await req(serve, { method: 'POST', path: '/send', token: TOKEN, body: 'not json{' })
+  check(r.status === 400, 'POST /send rejects invalid JSON body')
+
+  r = await req(serve, {
+    method: 'POST',
+    path: '/send',
+    token: TOKEN,
+    body: { recipient: '+123', channel: 'imessage', text: 'hi' },
+  })
+  check(r.status === 400, 'POST /send rejects too-short E.164 phone')
+
+  r = await req(serve, {
+    method: 'POST',
+    path: '/send',
+    token: TOKEN,
+    body: { recipient: '12345', channel: 'imessage', text: 'hi' },
+  })
+  check(r.status === 400, 'POST /send rejects short digit-only phone')
+
   // --- POST to unknown path -> 404 ---
   r = await req(serve, { method: 'POST', path: '/nope', token: TOKEN, body: {} })
   check(r.status === 404, 'POST to unknown path -> 404')

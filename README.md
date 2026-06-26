@@ -1,4 +1,4 @@
-# snazi
+# Soup Nazi AI - snazi
 
 > No messages for you.
 
@@ -53,6 +53,8 @@ messages through pluggable **channel adapters**; the iMessage adapter reads
 - `snazi list-new` → reveals **who** messaged + approval status. Never text.
 - `snazi read <sender>` → checks the server first; prints text **only if
   approved**, otherwise "No messages for you."
+- `snazi send <recipient> --text <message>` → sends an iMessage. **Never
+  gated** — you can always send to anyone.
 - `snazi check <sender> --channel <id>` → one sender's status.
 - `snazi channels list|add` → manage channels + see adapter availability here.
 - `snazi status` → config + platform + connectivity.
@@ -68,9 +70,10 @@ hand it a full shell. Instead, `snazi serve` exposes **only** the read-only
 gated operations over HTTP, reachable only on a private Tailscale tailnet:
 
 - `GET /health` (no auth) · `GET /list-new` · `GET /check` · `GET /read` ·
-  `GET /resolve` · `POST /label` — bearer-token protected except `/health`.
-  `/read` is read-only gated; `/label` is UPDATE-only (display names, cannot
-  change approval status).
+  `GET /resolve` · `POST /label` · `POST /send` — bearer-token protected except
+  `/health`. `/read` is read-only gated; `/send` is never gated (you can always
+  send to anyone). `/label` is UPDATE-only (display names, cannot change
+  approval status).
 - **No `approve`/`deny` over HTTP** (approvals stay dashboard/`/decide`-only).
 - Binds the **tailnet 100.x IP** (or `127.0.0.1` with `tailscale serve`),
   **never `0.0.0.0`**. Bearer token (`serveToken`) compared in constant time and
@@ -78,8 +81,8 @@ gated operations over HTTP, reachable only on a private Tailscale tailnet:
 - Runs as a launchd LaunchAgent via `snazi serve --install-daemon`. The node
   binary needs **Full Disk Access** to read `chat.db`.
 - Remote agent uses `snazi remote-list-new` / `remote-read` / `remote-check` /
-  `remote-resolve` / `remote-label` (config: `remoteUrl`, `remoteToken`) or
-  plain `curl`.
+  `remote-resolve` / `remote-label` / `remote-send` (config: `remoteUrl`,
+  `remoteToken`) or plain `curl`.
 
 See [`packages/snazi/README.md`](packages/snazi/README.md#serve-mode--least-privilege-http-gate-over-a-tailnet)
 for the full security model, config keys, and FDA setup.
@@ -96,7 +99,8 @@ entirely opt-in. Neither side stores message content.
 4. Agent: `snazi read +1555…` → now the gate opens and text is returned.
 
 Unknown/denied senders stay opaque. A malicious stranger can't inject content
-into the agent because the agent never sees their words.
+into the agent because the agent never sees their words. **Sending is never
+gated** — the agent can always reply or notify you via `snazi send`.
 
 ## Layout
 
@@ -163,3 +167,28 @@ A channel has two halves:
 
 The gate (`GET /api/senders/check`) is enforced before any content is revealed,
 regardless of channel.
+
+## CI & releases
+
+GitHub Actions handles build, test, and publishing (see `.github/workflows/`):
+
+- **`ci.yml`** runs on every push/PR to `main` — builds and tests `snazi`
+  (Node 18 + 20) and `web`. A normal commit to `main` **never** publishes.
+- **`release.yml`** runs only when a `v*` tag is pushed — it re-tests, verifies
+  the tag matches `package.json`, runs `npm publish --provenance`, and cuts a
+  GitHub Release.
+
+Cutting a release (from `packages/snazi`, on a clean `main`):
+
+```bash
+cd packages/snazi
+npm run release:patch   # 0.1.0 -> 0.1.1  (or release:minor / release:major)
+```
+
+That bumps the version, commits, creates the `vX.Y.Z` tag, and pushes both — the
+tag push triggers `release.yml`, which publishes to npm. No manual `npm publish`.
+
+**One-time setup:** add an npm **automation** token as the `NPM_TOKEN` repo
+secret (`gh secret set NPM_TOKEN`). Publishing also requires the npm package
+setting to allow GitHub Actions as a trusted publisher / the token to have
+publish rights.

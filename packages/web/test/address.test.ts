@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { normalizeAddress } from '../src/lib/address'
+import { normalizeAddress, validateRecipientAddress } from '../src/lib/address'
 
 /**
  * These vectors MUST stay in sync with packages/snazi/test/address.test.cjs —
@@ -69,5 +69,30 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress(undefined)).toBe('')
     expect(normalizeAddress('   ')).toBe('')
     expect(normalizeAddress('not-a-number')).toBe('not-a-number')
+  })
+})
+
+describe('validateRecipientAddress', () => {
+  const prev = process.env.SNAZI_DEFAULT_COUNTRY_CODE
+  beforeEach(() => {
+    delete process.env.SNAZI_DEFAULT_COUNTRY_CODE
+  })
+  afterEach(() => {
+    if (prev === undefined) delete process.env.SNAZI_DEFAULT_COUNTRY_CODE
+    else process.env.SNAZI_DEFAULT_COUNTRY_CODE = prev
+  })
+
+  it('accepts normalized phone numbers and emails', () => {
+    expect(validateRecipientAddress('5551234567')).toBe('+15551234567')
+    expect(validateRecipientAddress('+15551234567')).toBe('+15551234567')
+    expect(validateRecipientAddress('user@example.com')).toBe('user@example.com')
+  })
+
+  it('rejects invalid phones and emails', () => {
+    expect(() => validateRecipientAddress('12345')).toThrow(/Invalid/)
+    expect(() => validateRecipientAddress('+123')).toThrow(/Invalid phone/)
+    expect(() => validateRecipientAddress('not-a-number')).toThrow(/Invalid recipient/)
+    expect(() => validateRecipientAddress('bad@')).toThrow(/Invalid email/)
+    expect(() => validateRecipientAddress('')).toThrow(/Missing recipient/)
   })
 })

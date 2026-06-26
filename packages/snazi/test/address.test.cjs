@@ -73,6 +73,27 @@ eq('7700900123', '+447700900123')
 eq('447700900123', '+447700900123')
 delete process.env.SNAZI_DEFAULT_COUNTRY_CODE
 
+const { validateRecipientAddress } = require('../dist/address.js')
+
+function throws(fn, msg) {
+  try {
+    fn()
+    check(false, `${msg} (expected throw)`)
+  } catch (e) {
+    check(true, msg)
+  }
+}
+
+check(validateRecipientAddress('5551234567') === '+15551234567', 'validateRecipientAddress accepts 10-digit national')
+check(validateRecipientAddress('+15551234567') === '+15551234567', 'validateRecipientAddress accepts E.164')
+check(validateRecipientAddress('user@example.com') === 'user@example.com', 'validateRecipientAddress accepts email')
+
+throws(() => validateRecipientAddress('12345'), 'validateRecipientAddress rejects short digit-only number')
+throws(() => validateRecipientAddress('+123'), 'validateRecipientAddress rejects too-short E.164')
+throws(() => validateRecipientAddress('not-a-number'), 'validateRecipientAddress rejects non-phone text')
+throws(() => validateRecipientAddress('bad@'), 'validateRecipientAddress rejects malformed email')
+throws(() => validateRecipientAddress(''), 'validateRecipientAddress rejects empty')
+
 if (failures === 0) {
   console.log('\nRESULT: PASS')
   process.exit(0)

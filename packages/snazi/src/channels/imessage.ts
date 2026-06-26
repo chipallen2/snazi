@@ -65,4 +65,17 @@ export const imessageAdapter: ChannelAdapter = {
   readMessagesFrom(sender: string, sinceMinutes: number): MessageRow[] {
     return chatdb().readMessagesFrom(sender, sinceMinutes)
   },
+
+  sendAvailability(): ChannelAvailability {
+    // Lazy require keeps non-macOS installs free of send-side deps at import time.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const send = require('../imessage-send') as typeof import('../imessage-send')
+    return send.probeSendAvailability()
+  },
+
+  sendMessage(recipient: string, text: string): void {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const send = require('../imessage-send') as typeof import('../imessage-send')
+    send.sendIMessage(recipient, text)
+  },
 }
