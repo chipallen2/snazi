@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  snazi serve — launchd LaunchAgent.
+
+  This is a TEMPLATE. `snazi serve --install-daemon` substitutes the node
+  binary, CLI path, bind IP, port, and log dir, then writes the result to
+  ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist.
+
+  IMPORTANT — Full Disk Access:
+    launchd starts this as YOU, but reading ~/Library/Messages/chat.db requires
+    Full Disk Access. Grant FDA to the node binary referenced below in
+    System Settings > Privacy & Security > Full Disk Access. Without it,
+    /list-new and /read return an FDA error (the gate still holds).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.soup-nazi.snazi-serve</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE__</string>
+        <string>__CLI__</string>
+        <string>serve</string>
+        <string>--bind</string>
+        <string>__BIND__</string>
+        <string>--port</string>
+        <string>__PORT__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOGDIR__/snazi-serve.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOGDIR__/snazi-serve.err.log</string>
+</dict>
+</plist>
