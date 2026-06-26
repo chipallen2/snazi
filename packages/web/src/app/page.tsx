@@ -1,9 +1,9 @@
-import { redirect } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
 import { currentUserId } from '@/lib/currentUser'
 import { listSenders } from '@/lib/data'
 import type { Channel, Sender } from '@/lib/types'
 import { addSender, setStatus, removeSender } from './actions'
+import Landing from './landing'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,13 +43,13 @@ function SenderRow({
   const sub = s.label ? s.sender_address : null
 
   return (
-    <li className="flex items-center justify-between gap-3 px-4 py-3">
+    <li className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-stone-50/60">
       <div className="min-w-0">
-        <div className="truncate font-medium text-neutral-900">{primary}</div>
-        <div className="flex flex-wrap items-center gap-x-2 text-xs text-neutral-500">
+        <div className="truncate font-semibold text-ink">{primary}</div>
+        <div className="flex flex-wrap items-center gap-x-2 text-xs text-stone-500">
           {sub && <span className="font-mono">{sub}</span>}
           {showChannel && (
-            <span className="rounded bg-neutral-100 px-1.5 py-0.5">
+            <span className="rounded bg-stone-100 px-1.5 py-0.5">
               {channelName(channels, s.channel_id)}
             </span>
           )}
@@ -66,7 +66,7 @@ function SenderRow({
               'denied'
             )}
           >
-            <button className="rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">
+            <button className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50">
               Block
             </button>
           </form>
@@ -79,7 +79,7 @@ function SenderRow({
               'approved'
             )}
           >
-            <button className="rounded-md border border-green-200 px-3 py-1.5 text-sm font-medium text-green-700 hover:bg-green-50">
+            <button className="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-50">
               Allow
             </button>
           </form>
@@ -90,7 +90,7 @@ function SenderRow({
           <button
             title="Remove from list"
             aria-label={`Remove ${primary}`}
-            className="rounded-md px-2 py-1.5 text-sm text-neutral-300 hover:bg-neutral-100 hover:text-neutral-600"
+            className="rounded-lg px-2 py-1.5 text-sm text-stone-300 transition-colors hover:bg-stone-100 hover:text-stone-600"
           >
             ✕
           </button>
@@ -115,23 +115,27 @@ function SenderList({
   channels: Channel[]
   showChannel: boolean
 }) {
-  const dot = accent === 'green' ? 'bg-green-500' : 'bg-red-500'
+  const dot = accent === 'green' ? 'bg-emerald-500' : 'bg-red-500'
+  const count =
+    accent === 'green'
+      ? 'bg-emerald-100 text-emerald-700'
+      : 'bg-red-100 text-red-700'
   return (
-    <section className="space-y-2">
+    <section className="space-y-2.5">
       <div className="flex items-center gap-2">
         <span className={`h-2.5 w-2.5 rounded-full ${dot}`} />
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-700">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-stone-700">
           {title}
         </h2>
-        <span className="text-xs text-neutral-400">{list.length}</span>
+        <span className={`pill ${count} px-2 py-0.5`}>{list.length}</span>
       </div>
 
       {list.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-neutral-200 bg-white px-4 py-5 text-sm text-neutral-400">
+        <p className="rounded-xl border border-dashed border-stone-300 bg-white px-4 py-5 text-sm text-stone-400">
           {emptyText}
         </p>
       ) : (
-        <ul className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+        <ul className="card divide-y divide-stone-100 overflow-hidden">
           {list.map((s) => (
             <SenderRow
               key={s.id}
@@ -184,7 +188,8 @@ export default async function Home({
   searchParams: { done?: string; name?: string }
 }) {
   const ownerId = await currentUserId()
-  if (!ownerId) redirect('/login')
+  // Logged-out visitors get the public marketing landing page.
+  if (!ownerId) return <Landing />
   const { channels, senders } = await loadData(ownerId)
 
   const approved = senders
@@ -202,33 +207,34 @@ export default async function Home({
   const defaultChannel = channels[0]?.id ?? 'imessage'
 
   return (
-    <div className="space-y-7">
+    <div className="container-app space-y-7 py-8 sm:py-10">
       <DecisionBanner done={searchParams.done} name={searchParams.name} />
 
       {/* Intro */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
+        <span className="eyebrow">Your sender list</span>
+        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-ink sm:text-3xl">
           Who can reach your agent?
         </h1>
-        <p className="mt-1 text-sm text-neutral-500">
+        <p className="mt-1.5 text-sm text-stone-500">
           Allow the people you trust. Block the ones you don’t. Everyone else
           is ignored.
         </p>
       </div>
 
       {/* Primary action: add someone */}
-      <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm sm:p-5">
+      <section className="card p-4 sm:p-5">
         <form
           action={addSender}
           className="flex flex-col gap-3 sm:flex-row sm:items-end"
         >
           {multiChannel ? (
-            <label className="flex flex-col text-xs font-medium text-neutral-600 sm:w-40">
+            <label className="field-label sm:w-40">
               Channel
               <select
                 name="channel_id"
                 defaultValue={defaultChannel}
-                className="mt-1 rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-sm text-neutral-900"
+                className="input"
               >
                 {channels.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -241,23 +247,23 @@ export default async function Home({
             <input type="hidden" name="channel_id" value={defaultChannel} />
           )}
 
-          <label className="flex flex-1 flex-col text-xs font-medium text-neutral-600">
-            Phone number or email
+          <label className="field-label flex-1">
+            <span className="h-4 whitespace-nowrap leading-4">
+              Phone number or email
+            </span>
             <input
               name="sender_address"
               required
               placeholder="+1 555 123 4567"
-              className="mt-1 rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+              className="input"
             />
           </label>
 
-          <label className="flex flex-col text-xs font-medium text-neutral-600 sm:w-44">
-            Name <span className="text-neutral-400">(optional)</span>
-            <input
-              name="label"
-              placeholder="Mom"
-              className="mt-1 rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
-            />
+          <label className="field-label sm:w-48">
+            <span className="h-4 whitespace-nowrap leading-4">
+              Name <span className="text-stone-400">(optional)</span>
+            </span>
+            <input name="label" placeholder="Mom" className="input" />
           </label>
 
           <div className="flex gap-2">
@@ -265,7 +271,7 @@ export default async function Home({
               type="submit"
               name="status"
               value="approved"
-              className="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 sm:flex-none"
+              className="btn-allow flex-1 sm:w-24 sm:flex-none"
             >
               Allow
             </button>
@@ -273,7 +279,7 @@ export default async function Home({
               type="submit"
               name="status"
               value="denied"
-              className="flex-1 rounded-lg bg-neutral-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-neutral-900 sm:flex-none"
+              className="btn flex-1 bg-red-600 text-white shadow-sm hover:bg-red-700 active:bg-red-800 sm:w-24 sm:flex-none"
             >
               Block
             </button>
@@ -294,7 +300,7 @@ export default async function Home({
         <SenderList
           title="Blocked"
           accent="red"
-          emptyText="No one is blocked."
+          emptyText="No one is blocked yet. Add someone above to keep them away from your agent."
           list={denied}
           channels={channels}
           showChannel={multiChannel}

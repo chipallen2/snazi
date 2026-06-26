@@ -6,6 +6,89 @@
   color-scheme: light;
 }
 
-body {
-  @apply bg-neutral-50 text-neutral-900;
+@layer base {
+  body {
+    @apply bg-stone-50 text-stone-900 antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  /* One crisp, on-brand focus ring for buttons/links/controls. Form fields
+     (input/select/textarea) define their own ring below to avoid doubling. */
+  a:focus-visible,
+  button:focus-visible,
+  [role='button']:focus-visible,
+  summary:focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  /* ---- Layout ---- */
+  .container-app {
+    @apply mx-auto w-full max-w-4xl px-6;
+  }
+  .container-wide {
+    @apply mx-auto w-full max-w-6xl px-6;
+  }
+
+  /* ---- Surfaces ---- */
+  .card {
+    @apply rounded-2xl border border-stone-200/80 bg-white shadow-card;
+  }
+  .card-pad {
+    @apply card p-5 sm:p-6;
+  }
+
+  /* ---- Buttons ---- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+      transition-all duration-150 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-brand {
+    @apply btn bg-brand-500 text-white shadow-sm hover:bg-brand-600 active:bg-brand-700;
+  }
+  .btn-ink {
+    @apply btn bg-ink text-white shadow-sm hover:bg-ink-950 active:bg-black;
+  }
+  .btn-allow {
+    @apply btn bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 active:bg-emerald-800;
+  }
+  .btn-block {
+    @apply btn bg-stone-800 text-white shadow-sm hover:bg-stone-900 active:bg-black;
+  }
+  .btn-outline {
+    @apply btn border border-stone-300 bg-white text-stone-700 hover:border-stone-400 hover:bg-stone-50;
+  }
+  .btn-ghost {
+    @apply btn text-stone-600 hover:bg-stone-100 hover:text-stone-900;
+  }
+  .btn-lg {
+    @apply px-5 py-3 text-base;
+  }
+
+  /* ---- Forms ---- */
+  .field-label {
+    @apply flex flex-col text-xs font-semibold uppercase tracking-wide text-stone-500;
+  }
+  .input {
+    @apply mt-1.5 w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900
+      placeholder:text-stone-400 outline-none transition-colors
+      focus:border-brand-400 focus:ring-2 focus:ring-brand-500/25 focus:ring-offset-0;
+  }
+
+  /* ---- Bits ---- */
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.18em] text-brand-600;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+  .alert-error {
+    @apply rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-medium text-red-700;
+  }
+  .link-quiet {
+    @apply font-semibold text-brand-600 underline decoration-brand-300 underline-offset-2 hover:text-brand-700 hover:decoration-brand-500;
+  }
+  .code-block {
+    @apply overflow-x-auto rounded-xl border border-stone-200 bg-ink px-4 py-3 font-mono text-xs leading-relaxed text-stone-200;
+  }
 }

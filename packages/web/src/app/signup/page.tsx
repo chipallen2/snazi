@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { signup } from '../login/actions'
+import { PasswordInput } from '../password-input'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,69 +12,81 @@ export default function SignupPage({
   const error = searchParams.error
   const rateLimited = searchParams.error === 'rate'
   const next = searchParams.next || '/'
-  const loginHref = next !== '/' ? `/login?next=${encodeURIComponent(next)}` : '/login'
+  const loginHref =
+    next !== '/' ? `/login?next=${encodeURIComponent(next)}` : '/login'
 
   return (
-    <div className="mx-auto max-w-sm">
-      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="border-b border-neutral-100 px-6 pb-5 pt-6">
-          <h1 className="text-lg font-bold tracking-tight text-neutral-900">
-            Create account
+    <div className="container-app flex flex-1 items-center justify-center py-12">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 text-center">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink">
+            Create your account
           </h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Free. Your list is private to you. This service stores no messages.
+          <p className="mt-1.5 text-sm text-stone-500">
+            Free. Your list is private to you — snazi stores no messages.
           </p>
         </div>
 
-        <form action={signup} className="space-y-4 px-6 py-6">
-          <input type="hidden" name="next" value={next} />
-          <label className="flex flex-col text-xs font-medium text-neutral-600">
-            Email
-            <input
-              name="email"
-              type="email"
-              required
-              autoFocus
-              autoComplete="email"
-              className="mt-1 rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
-            />
-          </label>
-          <label className="flex flex-col text-xs font-medium text-neutral-600">
-            Password <span className="text-neutral-400">(min 8 characters)</span>
-            <input
-              name="password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete="new-password"
-              className="mt-1 rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
-            />
-          </label>
+        <div className="card overflow-hidden">
+          <form action={signup} className="space-y-4 p-6">
+            <input type="hidden" name="next" value={next} />
+            <label className="field-label">
+              Email
+              <input
+                name="email"
+                type="email"
+                required
+                autoFocus
+                autoComplete="email"
+                className="input"
+              />
+            </label>
+            <label className="field-label">
+              <span>
+                Password{' '}
+                <span className="font-normal normal-case tracking-normal text-stone-400">
+                  (min 8 characters)
+                </span>
+              </span>
+              <div className="mt-2">
+                <PasswordInput
+                  name="password"
+                  minLength={8}
+                  autoComplete="new-password"
+                />
+              </div>
+            </label>
 
-          {rateLimited && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-              Too many attempts. Please wait a few minutes and try again.
+            {rateLimited && (
+              <p className="alert-error">
+                Too many attempts. Please wait a few minutes and try again.
+              </p>
+            )}
+            {error && !rateLimited && <p className="alert-error">{error}</p>}
+
+            <button type="submit" className="btn-brand w-full">
+              Create account
+            </button>
+            <p className="flex items-center justify-center gap-1.5 text-center text-xs text-stone-400">
+              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-emerald-600">
+                <path
+                  d="M5 13l4 4L19 7"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              No message content is ever stored.
             </p>
-          )}
-          {error && !rateLimited && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-              {error}
-            </p>
-          )}
+          </form>
 
-          <button
-            type="submit"
-            className="w-full rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700"
-          >
-            Create account
-          </button>
-        </form>
-
-        <div className="border-t border-neutral-100 px-6 py-4 text-center text-sm text-neutral-500">
-          Already have an account?{' '}
-          <Link href={loginHref} className="font-medium text-neutral-900 hover:underline">
-            Sign in
-          </Link>
+          <div className="border-t border-stone-100 bg-stone-50/60 px-6 py-4 text-center text-sm text-stone-500">
+            Already have an account?{' '}
+            <Link href={loginHref} className="link-quiet">
+              Sign in
+            </Link>
+          </div>
         </div>
       </div>
     </div>

@@ -26,6 +26,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
+  // Public marketing landing lives at '/'. Logged-out visitors see the
+  // landing page (rendered by app/page.tsx); logged-in users see their
+  // dashboard. Either way the route is reachable without a session.
+  if (pathname === '/') {
+    return NextResponse.next()
+  }
+
   if (pathname === '/decide') {
     if (hasSession) return NextResponse.next()
     const owner = (searchParams.get('owner') || '').trim()
