@@ -8,7 +8,6 @@ import {
   SESSION_COOKIE,
   verifySessionToken,
   resolveDecideOwner,
-  signDecide,
 } from '@/lib/session'
 import { upsertSender, deleteSender } from '@/lib/data'
 import type { SenderStatus } from '@/lib/types'
@@ -113,18 +112,11 @@ export async function decideStatus(formData: FormData) {
   revalidatePath('/decide')
 
   const params = new URLSearchParams({
-    owner,
-    channel: channel_id,
-    sender: sender_address,
+    done: status === 'approved' ? 'allow' : 'block',
   })
-  if (label) params.set('label', label)
-  // Re-sign so the confirmation GET still passes the middleware gate for a
-  // link-only (passwordless) user.
-  const fresh = await signDecide(owner, channel_id, sender_address)
-  params.set('exp', String(fresh.exp))
-  params.set('sig', fresh.sig)
-  params.set('done', status === 'approved' ? 'allow' : 'block')
-  redirect(`/decide?${params.toString()}`)
+  const displayName = label || sender_address
+  if (displayName) params.set('name', displayName)
+  redirect(`/?${params.toString()}`)
 }
 
 export async function removeSender(channel_id: string, sender_address: string) {

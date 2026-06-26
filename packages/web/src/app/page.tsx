@@ -146,7 +146,43 @@ function SenderList({
   )
 }
 
-export default async function Home() {
+function DecisionBanner({
+  done,
+  name,
+}: {
+  done?: string
+  name?: string
+}) {
+  if (done !== 'allow' && done !== 'block') return null
+
+  const who = name?.trim()
+  const allowText = who
+    ? `Allowed — your agent can now read messages from ${who}.`
+    : 'Allowed — your agent can now read messages from this person.'
+  const blockText = who
+    ? `Blocked — your agent will ignore ${who}.`
+    : 'Blocked — your agent will ignore them.'
+
+  if (done === 'allow') {
+    return (
+      <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
+        {allowText}
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+      {blockText}
+    </div>
+  )
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: { done?: string; name?: string }
+}) {
   const ownerId = await currentUserId()
   if (!ownerId) redirect('/login')
   const { channels, senders } = await loadData(ownerId)
@@ -167,6 +203,8 @@ export default async function Home() {
 
   return (
     <div className="space-y-7">
+      <DecisionBanner done={searchParams.done} name={searchParams.name} />
+
       {/* Intro */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-neutral-900">

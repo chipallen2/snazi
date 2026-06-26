@@ -59,7 +59,6 @@ export default async function Decide({
     channel?: string
     sender?: string
     label?: string
-    done?: string
     exp?: string
     sig?: string
   }
@@ -67,7 +66,6 @@ export default async function Decide({
   const channel = (searchParams.channel || 'imessage').trim() || 'imessage'
   const sender = normalizeAddress(searchParams.sender || '')
   const passedLabel = (searchParams.label || '').trim()
-  const done = searchParams.done
   // Capability-link proof, threaded through so the POST action can re-verify
   // it (server actions are independently POST-able and must not trust the page
   // gate alone).
@@ -157,18 +155,6 @@ export default async function Decide({
             <StatusPill status={status} />
           </div>
         </div>
-
-        {/* Confirmation banner (after a decision) */}
-        {done === 'allow' && (
-          <div className="border-b border-green-100 bg-green-50 px-6 py-3 text-sm font-medium text-green-800">
-            Allowed — your agent can now read messages from this person.
-          </div>
-        )}
-        {done === 'block' && (
-          <div className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm font-medium text-red-800">
-            Blocked — your agent will ignore them.
-          </div>
-        )}
 
         {/* Decision buttons (always shown so the user can change their mind) */}
         <div className="space-y-3 px-6 py-6">
