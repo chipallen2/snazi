@@ -133,9 +133,10 @@ Tenant isolation is enforced in the app layer: every sender query goes through
 
 1. Create a Supabase project.
 2. Run the SQL in `packages/web/supabase/migrations/` in order: `001`, `003`,
-   and `004` are required (`004` introduces named, per-user channel instances).
-   `002` is an optional performance index (see the file header); skip it unless
-   you want faster name resolution at scale.
+   `004`, and `005` are required (`004` introduces named, per-user channel
+   instances; `005` drops a legacy channel-id constraint so per-channel
+   approvals work). `002` is an optional performance index (see the file
+   header); skip it unless you want faster name resolution at scale.
 3. Deploy `packages/web` to Vercel with these env vars (see `.env.example`):
    `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SOUP_NAZI_AUTH_SECRET`
    (`openssl rand -hex 32`).
