@@ -15,8 +15,10 @@
 import * as readline from 'node:readline/promises'
 import {
   type Config,
+  type ChannelConfig,
   CONFIG_PATH,
   DEFAULT_API_URL,
+  normalizeChannels,
   readConfigIfPresent,
   saveConfig,
 } from './config'
@@ -91,14 +93,28 @@ export async function runInit(
         : existing?.apiKey ?? '')
     ).trim()
 
-    const channelsDefault = existing?.channels?.length
-      ? existing.channels.join(',')
+    // Existing channels may be instance objects (with local credentials); keep
+    // them so re-running init never wipes a configured gmail/outlook channel.
+    const existingInstances = normalizeChannels(existing?.channels)
+    const channelsDefault = existingInstances.length
+      ? existingInstances.map((c) => c.id).join(',')
       : 'imessage'
-    const channelsRaw = a.channel ?? (interactive ? await ask('Channel(s), comma-separated', channelsDefault) : channelsDefault)
-    const channels = channelsRaw
+    const channelsRaw = a.channel ?? (interactive ? await ask('Channel id(s), comma-separated', channelsDefault) : channelsDefault)
+    const channelIds = channelsRaw
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
+    const ids = channelIds.length ? channelIds : ['imessage']
+    // Reuse an existing instance (preserving its type + auth) when the id
+    // matches; otherwise create a bare instance whose type equals its id.
+    const channels: ChannelConfig[] = ids.map(
+      (id) =>
+        existingInstances.find((c) => c.id === id) ?? {
+          id,
+          type: id,
+          name: id === 'imessage' ? 'iMessage' : id,
+        }
+    )
 
     if (!apiUrl) {
       return { code: 2, result: { error: 'A deployment URL is required.' } }
@@ -118,7 +134,7 @@ export async function runInit(
       ...(existing ?? ({} as Config)),
       apiUrl,
       apiKey: token,
-      channels: channels.length ? channels : ['imessage'],
+      channels,
     }
     saveConfig(merged)
 
@@ -136,7 +152,7 @@ export async function runInit(
         config_path: CONFIG_PATH,
         apiUrl,
         apiKey: maskToken(token),
-        channels: merged.channels,
+        channels: channels.map((c) => c.id),
         warnings: warnings.length ? warnings : undefined,
         next_steps: [
           'snazi doctor   # verify config, connectivity, and channel access',

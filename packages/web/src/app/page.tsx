@@ -1,6 +1,5 @@
-import { getSupabase } from '@/lib/supabase'
 import { currentUserId } from '@/lib/currentUser'
-import { listSenders } from '@/lib/data'
+import { listSenders, listChannels } from '@/lib/data'
 import type { Channel, Sender } from '@/lib/types'
 import { addSender, setStatus, removeSender } from './actions'
 import Landing from './landing'
@@ -10,21 +9,16 @@ export const dynamic = 'force-dynamic'
 async function loadData(
   ownerId: string
 ): Promise<{ channels: Channel[]; senders: Sender[] }> {
-  const supabase = getSupabase()
-  const [{ data: channels }, senders] = await Promise.all([
-    // Channels are a GLOBAL registry of channel types (shared reference data).
-    supabase.from('sna_channels').select('*').order('id'),
-    // Senders are scoped to this owner via the data-layer choke point.
+  // Both are scoped to this owner via the data-layer choke point.
+  const [channels, senders] = await Promise.all([
+    listChannels(ownerId),
     listSenders(ownerId),
   ])
-  return {
-    channels: (channels as Channel[]) ?? [],
-    senders,
-  }
+  return { channels, senders }
 }
 
-function channelName(channels: Channel[], id: string): string {
-  return channels.find((c) => c.id === id)?.display_name ?? id
+function channelName(channels: Channel[], slug: string): string {
+  return channels.find((c) => c.slug === slug)?.name ?? slug
 }
 
 /** One person in a list. Label (or address) is primary; a single clear
@@ -204,7 +198,7 @@ export default async function Home({
     )
 
   const multiChannel = channels.length > 1
-  const defaultChannel = channels[0]?.id ?? 'imessage'
+  const defaultChannel = channels[0]?.slug ?? 'imessage'
 
   return (
     <div className="container-app space-y-7 py-8 sm:py-10">
@@ -237,8 +231,8 @@ export default async function Home({
                 className="input"
               >
                 {channels.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.display_name}
+                  <option key={c.id} value={c.slug}>
+                    {c.name}
                   </option>
                 ))}
               </select>

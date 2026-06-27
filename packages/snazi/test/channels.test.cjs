@@ -47,6 +47,27 @@ check(
   'listAdapters() includes imessage'
 )
 
+// --- email channel TYPES are registered + run on any platform ---------------
+for (const type of ['gmail', 'outlook']) {
+  const a = getAdapter(type)
+  check(Boolean(a), `${type} adapter is registered`)
+  check(a && Array.isArray(a.platforms) && a.platforms.length === 0, `${type} runs on any platform`)
+  check(Boolean(a && a.sendMessage), `${type} supports sending`)
+  // Unconfigured (no auth) -> unavailable with a helpful reason, never a throw.
+  const ctx = { id: type, type, name: type, auth: {} }
+  const av = a.availability(ctx)
+  check(av.available === false && /not configured/i.test(av.reason || ''), `${type} unconfigured -> unavailable`)
+}
+
+// An instance can be resolved by slug to its type's adapter when a config maps
+// the slug -> type, with credentials available unavailability is the only gate.
+{
+  const cfg = { channels: [{ id: 'gmail-work', type: 'gmail', name: 'Work', auth: {} }] }
+  const r = resolveReadableAdapter('gmail-work', cfg)
+  // No creds -> resolves the adapter but reports unavailable via error.
+  check(Boolean(r.error) && /not configured/i.test(r.error || ''), 'slug resolves to type adapter; unconfigured -> error')
+}
+
 // --- resolveReadableAdapter never throws on an unknown channel -------------
 const unknown = resolveReadableAdapter('totally-unknown')
 check(

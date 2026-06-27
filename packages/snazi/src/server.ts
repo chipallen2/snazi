@@ -240,9 +240,14 @@ async function handleListNew(
 ): Promise<{ status: number; body: unknown }> {
   const channel = parseChannel(url.searchParams.get('channel'))
   const since = parseSince(url.searchParams.get('since'))
-  const { adapter, error } = resolveReadableAdapter(channel)
-  if (!adapter) return { status: 501, body: { error } }
-  const senders = adapter.listInboundSenders(since)
+  const { adapter, ctx, error } = resolveReadableAdapter(channel, cfg)
+  if (!adapter || !ctx) return { status: 501, body: { error } }
+  let senders
+  try {
+    senders = await adapter.listInboundSenders(ctx, since)
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
   // One list fetch -> address->label map (best-effort; null on any failure).
   const labels = await buildLabelMap(cfg, channel)
   // Build the Contacts index ONCE per request (best-effort, empty on failure).
@@ -284,8 +289,8 @@ async function handleRead(
 
   // Resolve the local source first so an unsupported channel/platform fails
   // clearly (and we never touch the network or any message text).
-  const { adapter, error } = resolveReadableAdapter(channel)
-  if (!adapter) return { status: 501, body: { error } }
+  const { adapter, ctx, error } = resolveReadableAdapter(channel, cfg)
+  if (!adapter || !ctx) return { status: 501, body: { error } }
 
   // GATE: check approval BEFORE touching any message text.
   let status: string
@@ -306,7 +311,12 @@ async function handleRead(
       body: { error: 'Sender not approved. No messages for you.', status },
     }
   }
-  const messages = adapter.readMessagesFrom(sender, since)
+  let messages
+  try {
+    messages = await adapter.readMessagesFrom(ctx, sender, since)
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
   // Gate already passed; attach display-only Contacts name (best-effort).
   const contact_name = contactIndexForRequest().get(sender)
   return {
@@ -411,7 +421,7 @@ async function handleLabel(
  * only blocks reading.
  */
 async function handleSend(
-  _cfg: Config,
+  cfg: Config,
   rawBody: string
 ): Promise<{ status: number; body: unknown }> {
   let parsed: unknown
@@ -424,12 +434,12 @@ async function handleSend(
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
   const text = parseText(typeof b.text === 'string' ? b.text : null)
-  const { adapter, error } = resolveSendableAdapter(channel)
-  if (!adapter?.sendMessage) {
+  const { adapter, ctx, error } = resolveSendableAdapter(channel, cfg)
+  if (!adapter?.sendMessage || !ctx) {
     return { status: 501, body: { error } }
   }
   try {
-    adapter.sendMessage(recipient, text)
+    await adapter.sendMessage(ctx, recipient, text)
     return { status: 200, body: { ok: true, channel, recipient } }
   } catch (e) {
     return {

@@ -6,11 +6,33 @@ export type SenderStatus = 'approved' | 'denied'
 /** Result of a sender check. 'unknown' = not present in the list. */
 export type CheckStatus = 'approved' | 'denied' | 'unknown'
 
-export interface Channel {
+/**
+ * A global channel TYPE (shared reference data). Defines which local adapter +
+ * transport a channel uses. Rows live in sna_channel_types.
+ */
+export interface ChannelType {
   id: string
   display_name: string
   description: string | null
   enabled: boolean
+  created_at: string
+}
+
+/**
+ * A per-user channel INSTANCE ("a channel", with a name). Rows live in
+ * sna_channels and are scoped to an owner. `slug` is what sna_senders.channel_id
+ * references and what the CLI passes as `--channel`. Many instances may share a
+ * `type` (e.g. a "Personal" and a "Work" gmail).
+ *
+ * NOTE: there are deliberately NO credentials here. OAuth tokens / app
+ * passwords live ONLY on the CLI machine, never on the server.
+ */
+export interface Channel {
+  id: string
+  owner_id: string
+  type: string
+  name: string
+  slug: string
   created_at: string
 }
 

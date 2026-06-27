@@ -11,6 +11,7 @@
 import type {
   ChannelAdapter,
   ChannelAvailability,
+  ChannelContext,
   SenderSummary,
   MessageRow,
 } from './types'
@@ -32,7 +33,8 @@ export const imessageAdapter: ChannelAdapter = {
   displayName: 'iMessage',
   platforms: ['darwin'],
 
-  availability(): ChannelAvailability {
+  // iMessage reads the local Messages DB, so it ignores the per-instance ctx.
+  availability(_ctx?: ChannelContext): ChannelAvailability {
     if (process.platform !== 'darwin') {
       return {
         available: false,
@@ -58,22 +60,33 @@ export const imessageAdapter: ChannelAdapter = {
     return { available: false, reason: probe.reason, detail: FDA_HINT }
   },
 
-  listInboundSenders(sinceMinutes: number): SenderSummary[] {
+  async listInboundSenders(
+    _ctx: ChannelContext,
+    sinceMinutes: number
+  ): Promise<SenderSummary[]> {
     return chatdb().listInboundSenders(sinceMinutes)
   },
 
-  readMessagesFrom(sender: string, sinceMinutes: number): MessageRow[] {
+  async readMessagesFrom(
+    _ctx: ChannelContext,
+    sender: string,
+    sinceMinutes: number
+  ): Promise<MessageRow[]> {
     return chatdb().readMessagesFrom(sender, sinceMinutes)
   },
 
-  sendAvailability(): ChannelAvailability {
+  sendAvailability(_ctx?: ChannelContext): ChannelAvailability {
     // Lazy require keeps non-macOS installs free of send-side deps at import time.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const send = require('../imessage-send') as typeof import('../imessage-send')
     return send.probeSendAvailability()
   },
 
-  sendMessage(recipient: string, text: string): void {
+  async sendMessage(
+    _ctx: ChannelContext,
+    recipient: string,
+    text: string
+  ): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const send = require('../imessage-send') as typeof import('../imessage-send')
     send.sendIMessage(recipient, text)

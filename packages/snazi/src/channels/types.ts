@@ -17,6 +17,7 @@
 // channel-neutral types every adapter speaks. `import type` / `export type`
 // are erased at runtime, so this module pulls in no native dependency.
 import type { SenderSummary, MessageRow } from '../chatdb'
+import type { ChannelAuth } from '../config'
 export type { SenderSummary, MessageRow }
 
 export interface ChannelAvailability {
@@ -27,30 +28,54 @@ export interface ChannelAvailability {
   detail?: string
 }
 
-export interface ChannelAdapter {
-  /** Stable id used in config + the server list (e.g. 'imessage'). */
+/**
+ * Per-call context identifying WHICH channel instance an adapter is acting for.
+ * One adapter (e.g. the gmail adapter) serves every gmail instance; the context
+ * carries that instance's id/name and its LOCAL credentials so "Personal" and
+ * "Work" gmail read different mailboxes. Credentials never leave this machine.
+ */
+export interface ChannelContext {
+  /** Instance slug (the `--channel` value), e.g. 'gmail-work'. */
   id: string
-  /** Human-readable name (e.g. 'iMessage'). */
+  /** Channel type, e.g. 'gmail'. Selects this adapter. */
+  type: string
+  /** Human-readable instance name, e.g. 'Work'. */
+  name: string
+  /** Local-only credentials for this instance (empty for imessage). */
+  auth: ChannelAuth
+}
+
+export interface ChannelAdapter {
+  /** Stable TYPE id used in config + the server registry (e.g. 'imessage'). */
+  id: string
+  /** Human-readable type name (e.g. 'iMessage'). */
   displayName: string
   /**
    * `process.platform` values this adapter can read on (e.g. ['darwin']).
    * An empty array means "any platform".
    */
   platforms: NodeJS.Platform[]
-  /** Can this channel actually be read on THIS machine right now? */
-  availability(): ChannelAvailability
+  /** Can this channel instance actually be read on THIS machine right now? */
+  availability(ctx?: ChannelContext): ChannelAvailability
   /** Distinct inbound senders in the window — WHO only, never content. */
-  listInboundSenders(sinceMinutes: number): SenderSummary[]
+  listInboundSenders(
+    ctx: ChannelContext,
+    sinceMinutes: number
+  ): Promise<SenderSummary[]>
   /** Messages for ONE sender. Caller MUST have verified approval first. */
-  readMessagesFrom(sender: string, sinceMinutes: number): MessageRow[]
+  readMessagesFrom(
+    ctx: ChannelContext,
+    sender: string,
+    sinceMinutes: number
+  ): Promise<MessageRow[]>
   /**
-   * Can this channel send outbound messages on THIS machine right now?
+   * Can this channel instance send outbound messages on THIS machine right now?
    * Omit when the channel has no send path.
    */
-  sendAvailability?(): ChannelAvailability
+  sendAvailability?(ctx?: ChannelContext): ChannelAvailability
   /**
    * Send a message to a recipient. NEVER gated by the approval list — the
    * soup nazi only blocks reading. Throws on failure.
    */
-  sendMessage?(recipient: string, text: string): void
+  sendMessage?(ctx: ChannelContext, recipient: string, text: string): Promise<void>
 }

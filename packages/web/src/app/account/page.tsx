@@ -14,7 +14,19 @@ export default async function AccountPage() {
     {
       apiUrl: 'https://snazi.dev',
       apiKey: user.read_token,
-      channels: ['imessage'],
+      channels: [
+        { id: 'imessage', type: 'imessage', name: 'iMessage' },
+        {
+          id: 'gmail-work',
+          type: 'gmail',
+          name: 'Work',
+          auth: {
+            clientId: 'XXXX.apps.googleusercontent.com',
+            clientSecret: 'GOCSPX-…',
+            refreshToken: '1//0g…',
+          },
+        },
+      ],
     },
     null,
     2

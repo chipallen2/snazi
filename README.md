@@ -114,9 +114,14 @@ packages/
 
 - `sna_users` — accounts: email, password hash, per-user read token. **No
   message data.**
-- `sna_channels` — global channel registry (`imessage` seeded; extensible to
-  gmail…). Shared reference data, not per-user.
-- `sna_senders` — the approve/deny list, **scoped to `owner_id`**. `status` ∈
+- `sna_channel_types` — global registry of channel **types** (`imessage`,
+  `gmail`, `outlook` seeded). Shared reference data, not per-user.
+- `sna_channels` — per-user channel **instances**: a named "channel" (e.g.
+  "Work"), with a `type` and a per-owner `slug`. **Many instances may share a
+  type** (a Personal *and* a Work Gmail). Scoped to `owner_id`. Stores only
+  name + type — **never credentials** (those live on the CLI machine).
+- `sna_senders` — the approve/deny list, **scoped to `owner_id`** and to a
+  channel instance (`channel_id` = that instance's slug). `status` ∈
   {`approved`,`denied`}; absent = `unknown`. **No message tables exist.**
 
 Tenant isolation is enforced in the app layer: every sender query goes through
@@ -127,9 +132,10 @@ Tenant isolation is enforced in the app layer: every sender query goes through
 **Server (`packages/web`)**
 
 1. Create a Supabase project.
-2. Run the SQL in `packages/web/supabase/migrations/` in order: `001` and
-   `003` are required. `002` is an optional performance index (see the file
-   header); skip it unless you want faster name resolution at scale.
+2. Run the SQL in `packages/web/supabase/migrations/` in order: `001`, `003`,
+   and `004` are required (`004` introduces named, per-user channel instances).
+   `002` is an optional performance index (see the file header); skip it unless
+   you want faster name resolution at scale.
 3. Deploy `packages/web` to Vercel with these env vars (see `.env.example`):
    `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SOUP_NAZI_AUTH_SECRET`
    (`openssl rand -hex 32`).
@@ -153,17 +159,29 @@ channel only works where its adapter does (iMessage is macOS-only); a non-Mac
 host can still drive a Mac's `snazi serve` over a tailnet via the `remote-*`
 commands.
 
-## Extending to other channels
+## Channels: types vs. instances
 
-A channel has two halves:
+- A channel **type** (`imessage`, `gmail`, `outlook`) defines the adapter +
+  transport. Types are global, seeded in `sna_channel_types`.
+- A channel **instance** is a *named* connection of a type that a user creates
+  (dashboard → **Channels**), e.g. "Personal" and "Work" Gmail. Each instance
+  has its own approve/deny list. Credentials for an instance live **only on the
+  CLI machine** (`~/.snazi/config.json`), never on the server.
 
-1. **Server:** add a row to `sna_channels` (the global registry). The list API,
-   the gate, and `/decide` links are already channel-agnostic.
+To use a new channel instance, create it in the dashboard (name + type), then
+configure the matching id + credentials locally with `snazi channels add` (see
+[`packages/snazi/README.md`](packages/snazi/README.md#channels--email-setup)).
+
+### Adding a new channel TYPE (for contributors)
+
+1. **Server:** add a row to `sna_channel_types` (the global registry). The list
+   API, the gate, and `/decide` links are already channel-agnostic.
 2. **Local adapter:** add a `ChannelAdapter` under
    `packages/snazi/src/channels/` (implement `availability`,
-   `listInboundSenders`, `readMessagesFrom`) and register it in
-   `src/channels/index.ts`. Every CLI/serve command then works for it
-   automatically, on whatever OS the adapter supports.
+   `listInboundSenders`, `readMessagesFrom`, and optionally `sendMessage`) and
+   register it in `src/channels/index.ts`. Adapters receive a `ChannelContext`
+   carrying the instance's local credentials. Every CLI/serve command then works
+   for it automatically, on whatever OS the adapter supports.
 
 The gate (`GET /api/senders/check`) is enforced before any content is revealed,
 regardless of channel.

@@ -27,7 +27,14 @@
  * needn't re-check every call. Content is read live from the local Messages
  * database and printed only when the gate opens.
  */
-import { loadConfig, saveConfig, readConfigIfPresent, CONFIG_PATH } from './config'
+import {
+  loadConfig,
+  saveConfig,
+  readConfigIfPresent,
+  normalizeChannels,
+  CONFIG_PATH,
+  type ChannelConfig,
+} from './config'
 import { normalizeAddress, validateRecipientAddress } from './address'
 import { buildLabelMap, ping, type CheckStatus } from './api'
 import { checkSenderCached, clearCache } from './cache'
@@ -90,12 +97,18 @@ async function cmdListNew(args: string[]): Promise<number> {
   const fresh = hasFlag(args, '--fresh')
   const cfg = loadConfig()
 
-  const { adapter, error } = resolveReadableAdapter(channel)
-  if (!adapter) {
+  const { adapter, ctx, error } = resolveReadableAdapter(channel, cfg)
+  if (!adapter || !ctx) {
     out({ error })
     return 1
   }
-  const senders = adapter.listInboundSenders(since)
+  let senders
+  try {
+    senders = await adapter.listInboundSenders(ctx, since)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
   const labels = await buildLabelMap(cfg, channel)
   // Local macOS Contacts enrichment (display-only; best-effort, empty on fail).
   const contacts = buildContactIndex()
@@ -140,8 +153,8 @@ async function cmdRead(args: string[]): Promise<number> {
 
   // Resolve the local source first so an unsupported channel/platform fails
   // with a clear message (and never touches the network or any message text).
-  const { adapter, error } = resolveReadableAdapter(channel)
-  if (!adapter) {
+  const { adapter, ctx, error } = resolveReadableAdapter(channel, cfg)
+  if (!adapter || !ctx) {
     out({ error })
     return 1
   }
@@ -160,7 +173,13 @@ async function cmdRead(args: string[]): Promise<number> {
     return 1
   }
 
-  const messages = adapter.readMessagesFrom(target, since)
+  let messages
+  try {
+    messages = await adapter.readMessagesFrom(ctx, target, since)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
   out({ sender: target, status, since_minutes: since, messages })
   return 0
 }
@@ -200,9 +219,13 @@ async function cmdSend(args: string[]): Promise<number> {
     return 2
   }
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  // Lenient read: sending an iMessage needs no config at all; email channels
+  // pull their local credentials from it when present.
+  const cfg = readConfigIfPresent() ?? undefined
 
   let target: string
   try {
+    // Accepts phone (E.164) OR email, so it works for every channel type.
     target = validateRecipientAddress(rawRecipient)
   } catch (e) {
     out({ error: String(e instanceof Error ? e.message : e) })
@@ -210,13 +233,13 @@ async function cmdSend(args: string[]): Promise<number> {
   }
 
   // Sending is NEVER gated — the soup nazi only blocks reading.
-  const { adapter, error } = resolveSendableAdapter(channel)
-  if (!adapter?.sendMessage) {
+  const { adapter, ctx, error } = resolveSendableAdapter(channel, cfg)
+  if (!adapter?.sendMessage || !ctx) {
     out({ error })
     return 1
   }
   try {
-    adapter.sendMessage(target, text)
+    await adapter.sendMessage(ctx, target, text)
     out({ ok: true, channel, recipient: target })
     return 0
   } catch (e) {
@@ -242,38 +265,80 @@ async function cmdChannels(args: string[]): Promise<number> {
   if (sub === 'list' || sub === undefined) {
     // Works even before `snazi init` (read config leniently, don't exit).
     const cfg = readConfigIfPresent()
-    const adapters = listAdapters().map((a) => {
-      const av = a.availability()
+    const channels = normalizeChannels(cfg?.channels).map((inst) => {
+      const adapter = getAdapter(inst.type)
+      const ctx = {
+        id: inst.id,
+        type: inst.type,
+        name: inst.name ?? inst.id,
+        auth: inst.auth ?? {},
+      }
+      const av = adapter
+        ? adapter.availability(ctx)
+        : { available: false, reason: `no local adapter for type '${inst.type}' on this build` }
       return {
-        id: a.id,
-        display_name: a.displayName,
-        platforms: a.platforms,
+        id: inst.id,
+        type: inst.type,
+        name: inst.name ?? inst.id,
         available_here: av.available,
         reason: av.reason ?? null,
       }
     })
-    out({ configured: cfg?.channels ?? [], adapters })
+    // The channel TYPES this build can drive locally.
+    const types = listAdapters().map((a) => ({
+      type: a.id,
+      display_name: a.displayName,
+      platforms: a.platforms,
+    }))
+    out({ channels, types })
     return 0
   }
 
   if (sub === 'add') {
-    const channel = args[1]
-    if (!channel) {
-      out({ error: 'Usage: snazi channels add <channel>' })
+    const id = args[1]
+    if (!id || id.startsWith('--')) {
+      out({
+        error:
+          'Usage: snazi channels add <id> [--type <type>] [--name <name>] ' +
+          '[--client-id <id>] [--client-secret <secret>] [--refresh-token <tok>] ' +
+          '[--tenant <id>] [--user <email>]',
+      })
       return 2
     }
     const cfg = loadConfig()
-    const channels = new Set(cfg.channels ?? [])
-    channels.add(channel)
-    cfg.channels = [...channels]
+    const type = flag(args, '--type') ?? id
+    const name = flag(args, '--name') ?? id
+
+    const auth: NonNullable<ChannelConfig['auth']> = {}
+    const clientId = flag(args, '--client-id')
+    const clientSecret = flag(args, '--client-secret')
+    const refreshToken = flag(args, '--refresh-token')
+    const tenant = flag(args, '--tenant')
+    const user = flag(args, '--user')
+    if (clientId) auth.clientId = clientId
+    if (clientSecret) auth.clientSecret = clientSecret
+    if (refreshToken) auth.refreshToken = refreshToken
+    if (tenant) auth.tenantId = tenant
+    if (user) auth.user = user
+
+    const instance: ChannelConfig = { id, type, name }
+    if (Object.keys(auth).length > 0) instance.auth = auth
+
+    // Replace any existing instance with the same id, then append.
+    const list = normalizeChannels(cfg.channels).filter((c) => c.id !== id)
+    list.push(instance)
+    cfg.channels = list
     saveConfig(cfg)
-    const known = getAdapter(channel)
+
+    const known = getAdapter(type)
     out({
       ok: true,
-      channels: cfg.channels,
+      // Never echo secrets back.
+      channel: { id, type, name },
+      channels: list.map((c) => c.id),
       note: known
         ? undefined
-        : `'${channel}' has no local adapter yet; it can still be used with remote-* against a host that supports it.`,
+        : `Type '${type}' has no local adapter on this build; this channel can still be used with remote-* against a host that supports it.`,
     })
     return 0
   }
@@ -497,7 +562,7 @@ async function cmdStatus(): Promise<number> {
     node: process.versions.node,
     apiUrl: cfg.apiUrl,
     apiKey: cfg.apiKey ? `${cfg.apiKey.slice(0, 6)}…(${cfg.apiKey.length})` : null,
-    channels: cfg.channels ?? [],
+    channels: normalizeChannels(cfg.channels).map((c) => ({ id: c.id, type: c.type })),
     server_reachable: reachable,
   })
   return reachable ? 0 : 1
@@ -517,8 +582,8 @@ Usage:
   snazi read <sender> [--channel <id>] [--since <min>]  Show message text — only if sender is approved
   snazi send <recipient> --text <message> [--channel <id>]  Send a message (never gated)
   snazi check <sender> --channel <id>                   Print one sender's approval status
-  snazi channels list                                   List configured channels + adapter availability here
-  snazi channels add <channel>                          Add a channel (e.g. imessage)
+  snazi channels list                                   List configured channels (instances) + adapter availability here
+  snazi channels add <id> [--type <t>] [--name <n>] [auth flags]   Configure a channel instance (e.g. id gmail-work, type gmail)
   snazi cache clear                                     Drop the cached approval statuses (force fresh checks)
   snazi status                                          Show config + platform + server connectivity
 

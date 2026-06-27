@@ -54,7 +54,17 @@ export async function createUser(
     }
     return { error: error.message }
   }
-  return { user: data as User }
+
+  // Seed a default iMessage channel instance so the dashboard isn't empty and
+  // the slug 'imessage' (used by existing CLI configs + /decide links) exists.
+  // Best-effort: a failure here must not fail signup.
+  const user = data as User
+  await supabase
+    .from('sna_channels')
+    .insert({ owner_id: user.id, type: 'imessage', name: 'iMessage', slug: 'imessage' })
+    .then(undefined, () => undefined)
+
+  return { user }
 }
 
 /**

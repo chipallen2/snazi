@@ -13,7 +13,7 @@
  * works remotely on this OS) are surfaced but do not fail, because remote-only
  * use (e.g. a Windows box driving a Mac `snazi serve`) is legitimate.
  */
-import { CONFIG_PATH, readConfigIfPresent } from './config'
+import { CONFIG_PATH, readConfigIfPresent, normalizeChannels } from './config'
 import { ping } from './api'
 import { getAdapter, listAdapters } from './channels'
 
@@ -52,36 +52,46 @@ export async function runDoctor(): Promise<{ code: number; report: unknown }> {
     }
   }
 
-  const configuredChannels = cfg?.channels?.length
-    ? cfg.channels
-    : configValid
-      ? ['imessage']
-      : []
+  const instances = normalizeChannels(cfg?.channels)
+  const configuredChannels =
+    instances.length > 0
+      ? instances
+      : configValid
+        ? [{ id: 'imessage', type: 'imessage', name: 'iMessage' }]
+        : []
 
-  const channels = configuredChannels.map((id) => {
-    const adapter = getAdapter(id)
+  const channels = configuredChannels.map((inst) => {
+    const adapter = getAdapter(inst.type)
+    const ctx = {
+      id: inst.id,
+      type: inst.type,
+      name: inst.name ?? inst.id,
+      auth: inst.auth ?? {},
+    }
     if (!adapter) {
       warnings.push(
-        `Channel '${id}' has no local adapter on this build; only remote-* (against a host that supports it) will work here.`
+        `Channel '${inst.id}' (type '${inst.type}') has no local adapter on this build; only remote-* (against a host that supports it) will work here.`
       )
       return {
-        id,
+        id: inst.id,
+        type: inst.type,
         known: false,
         available: false,
         reason: 'no local adapter on this build',
         detail: null as string | null,
       }
     }
-    const av = adapter.availability()
-    const sendAv = adapter.sendAvailability?.()
+    const av = adapter.availability(ctx)
+    const sendAv = adapter.sendAvailability?.(ctx)
     if (!av.available) {
-      warnings.push(`Channel '${id}' is not readable locally: ${av.reason}`)
+      warnings.push(`Channel '${inst.id}' (${inst.type}) is not readable locally: ${av.reason}`)
     }
     if (adapter.sendMessage && sendAv && !sendAv.available) {
-      warnings.push(`Channel '${id}' cannot send locally: ${sendAv.reason}`)
+      warnings.push(`Channel '${inst.id}' (${inst.type}) cannot send locally: ${sendAv.reason}`)
     }
     return {
-      id,
+      id: inst.id,
+      type: inst.type,
       known: true,
       available: av.available,
       reason: av.reason ?? null,

@@ -1,13 +1,19 @@
-# snazi — message gate CLI (iMessage today)
+# snazi — message gate CLI (iMessage, Gmail, Outlook)
 
 > "No messages for you."
 
 The **local gate**. An on-demand CLI that reads your messages through pluggable
 **channel adapters** so an AI agent can be told *who* messaged without being able
 to read *what* they said — unless the sender is on the server's approved list.
-iMessage is the first channel; the architecture is built for more (Gmail,
-Outlook, …). The CLI itself runs on macOS, Windows, and Linux (Node 18+); each
-channel works wherever its adapter does (iMessage is macOS-only).
+Built-in channel **types**: iMessage (macOS), Gmail (Gmail API), and Outlook
+(Microsoft Graph). The CLI runs on macOS, Windows, and Linux (Node 18+); each
+type works wherever its adapter does (iMessage is macOS-only; Gmail/Outlook are
+pure HTTPS, so they run anywhere).
+
+You configure **channels** as named instances of a type, and you can have
+several of the same type — e.g. a `Personal` and a `Work` Gmail, each with its
+own approve/deny list. The `--channel` flag takes a channel **id** (slug) such as
+`imessage` or `gmail-work`; it defaults to `imessage`.
 
 The base CLI runs **on demand** — no launchd job, no background process. The
 agent invokes it when needed. It stores nothing locally and the server stores no
@@ -85,8 +91,8 @@ snazi init && snazi doctor
 | `snazi read <sender> [--channel <id>] [--since <min>] [--fresh]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
 | `snazi send <recipient> --text <message> [--channel <id>]` | Send a message. **Never gated** — you can always send to anyone. |
 | `snazi check <sender> --channel <id> [--fresh]` | One sender's approval status, display label, and local Contacts `contact_name` (`approved`/`denied`/`unknown`). |
-| `snazi channels list` | Configured channels plus adapter availability on this machine. |
-| `snazi channels add <channel>` | Add a channel (e.g. `snazi channels add imessage`). |
+| `snazi channels list` | Configured channels (instances) + the channel types this build can drive locally. |
+| `snazi channels add <id> [--type <t>] [--name <n>] [auth flags]` | Configure a channel instance locally (see **Channels & email setup**). |
 | `snazi cache clear` | Drop cached approval statuses (force fresh checks after a revocation). |
 | `snazi status` | Config path, apiUrl, masked read token, channels, server reachability. |
 | `snazi serve [--bind <ip>] [--port <n>]` | Start the read-only HTTP gate (see **Serve mode** below). |
@@ -130,6 +136,119 @@ snazi read "+15551234567"
 snazi send "+15551234567" --text "On my way!"
 # { "ok": true, "channel": "imessage", "recipient": "+15551234567" }
 ```
+
+## Channels & email setup
+
+A **channel type** (`imessage`, `gmail`, `outlook`) defines the adapter +
+transport. A **channel** is a *named instance* of a type — and you can have many
+of the same type. Each channel has its own approve/deny list, keyed by its
+**id** (slug).
+
+A channel lives in two places:
+
+1. **On the server (dashboard → Channels):** register the channel's **name +
+   type**. The server generates the slug and shows it. This is what gives the
+   channel its own list. **No credentials are ever stored on the server.**
+2. **On this CLI machine (`~/.snazi/config.json`):** the channel's **id (= that
+   slug), type, and credentials**. The id must match the dashboard slug so the
+   gate checks the right list.
+
+`config.json` `channels` is an array of instances:
+
+```json
+{
+  "apiUrl": "https://snazi.dev",
+  "apiKey": "<your READ token>",
+  "channels": [
+    { "id": "imessage", "type": "imessage", "name": "iMessage" },
+    {
+      "id": "gmail-work",
+      "type": "gmail",
+      "name": "Work",
+      "auth": {
+        "clientId": "XXXX.apps.googleusercontent.com",
+        "clientSecret": "GOCSPX-…",
+        "refreshToken": "1//0g…"
+      }
+    },
+    {
+      "id": "gmail-personal",
+      "type": "gmail",
+      "name": "Personal",
+      "auth": { "clientId": "…", "clientSecret": "…", "refreshToken": "…" }
+    }
+  ]
+}
+```
+
+> The legacy form (`"channels": ["imessage"]`, an array of type strings) is still
+> accepted and treated as `{ id, type, name }` instances.
+
+Then read/send against a specific channel by its id:
+
+```bash
+snazi list-new --channel gmail-work --since 1440
+snazi read "alice@example.com" --channel gmail-work
+snazi send "alice@example.com" --channel gmail-work \
+  --text $'Subject: Re: lunch\n\nSounds good!'
+```
+
+`send` treats the text as the email body. To set a subject, start the text with
+a `Subject: …` line followed by a blank line (as above); otherwise the subject
+defaults to `(no subject)`.
+
+### Credentials live ONLY on this machine
+
+OAuth tokens / secrets are written to `~/.snazi/config.json` (created `0600`) and
+are **never** sent to the snazi server. You can hand-edit that file, or set them
+with `channels add` (which never echoes secrets back):
+
+```bash
+snazi channels add gmail-work --type gmail --name Work \
+  --client-id <id> --client-secret <secret> --refresh-token <token>
+```
+
+### Gmail (Gmail API + OAuth2)
+
+1. In Google Cloud Console: create a project, enable the **Gmail API**, and
+   create an **OAuth client** (Desktop app gives you a client id + secret).
+2. Authorize the scopes `https://www.googleapis.com/auth/gmail.readonly` (read)
+   and `https://www.googleapis.com/auth/gmail.send` (send), and obtain a
+   **refresh token** for the mailbox (e.g. via the OAuth Playground or your own
+   consent flow).
+3. Configure it locally:
+   ```bash
+   snazi channels add gmail-work --type gmail --name Work \
+     --client-id <id> --client-secret <secret> --refresh-token <token>
+   ```
+
+### Outlook / Microsoft 365 (Microsoft Graph + OAuth2)
+
+1. In the Azure portal: register an app, add a client secret, and grant the
+   delegated scopes `offline_access` + mail read/send (`Mail.Read` or
+   `Mail.ReadWrite`, plus `Mail.Send`).
+2. Obtain a **refresh token** for the mailbox.
+3. Configure it locally:
+   ```bash
+   snazi channels add outlook-work --type outlook --name Work \
+     --client-id <id> --client-secret <secret> --refresh-token <token> \
+     --tenant <tenant-id> --user you@company.com
+   ```
+
+**`--tenant` matters.** It defaults to `common`, which only works for
+*multi-tenant* apps. If your app is **single-tenant** (the common case, and what
+Azure creates by default), you must pass your **Directory (tenant) ID** (a GUID
+from the app's Overview page) or a verified domain (e.g.
+`yourcompany.onmicrosoft.com`) — otherwise the token refresh fails with
+`AADSTS50194`.
+
+**Scopes are inherited.** On refresh, snazi requests no specific scopes, so the
+access token carries whatever the refresh token was originally granted (this is
+why tokens exported from tools like n8n work as-is). Set `auth.scope` only if you
+want to narrow them.
+
+`snazi doctor` and `snazi channels list` report, per channel, whether its
+credentials are configured and the adapter is usable on this machine.
 
 ## Serve mode — least-privilege HTTP gate over a tailnet
 

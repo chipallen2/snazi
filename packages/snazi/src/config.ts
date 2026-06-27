@@ -2,6 +2,47 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
+/**
+ * Per-channel credentials. LOCAL ONLY — these never leave this machine and are
+ * never sent to the snazi server (which stores no secrets). Which fields apply
+ * depends on the channel type:
+ *   - gmail/outlook: clientId + clientSecret + refreshToken (OAuth2). outlook
+ *     also takes an optional tenantId (default 'common').
+ *   - imessage: none (it reads the local Messages database).
+ */
+export interface ChannelAuth {
+  clientId?: string
+  clientSecret?: string
+  refreshToken?: string
+  /**
+   * Microsoft Entra tenant id (outlook only). For a single-tenant app this MUST
+   * be the directory's tenant id (a GUID) or a verified domain — NOT 'common'.
+   * Default 'common' (works only for multi-tenant apps).
+   */
+  tenantId?: string
+  /**
+   * Optional space-delimited OAuth scopes to request on token refresh. Leave
+   * unset to INHERIT whatever the refresh token was originally granted — the
+   * most compatible choice (e.g. tokens minted by n8n). Only set this if you
+   * need to narrow the scopes.
+   */
+  scope?: string
+  /** Mailbox address (optional; used as the From identity when sending). */
+  user?: string
+}
+
+/**
+ * A configured channel INSTANCE. `id` is the per-account slug used as
+ * `--channel` and in every API call (it must match the channel's slug in the
+ * dashboard). `type` selects the local adapter (imessage | gmail | outlook).
+ */
+export interface ChannelConfig {
+  id: string
+  type: string
+  name?: string
+  auth?: ChannelAuth
+}
+
 export interface Config {
   apiUrl: string
   /**
@@ -11,8 +52,13 @@ export interface Config {
    * /decide links. READ-ONLY: it can never approve/deny a sender.
    */
   apiKey: string
-  /** Configured channels (e.g. ["imessage"]). */
-  channels?: string[]
+  /**
+   * Configured channels. Each is a named INSTANCE of a type. The legacy form —
+   * an array of plain type strings (e.g. ["imessage"]) — is still accepted and
+   * normalized by normalizeChannels(); prefer the object form for new configs:
+   *   [{ "id": "gmail-work", "type": "gmail", "name": "Work", "auth": {...} }]
+   */
+  channels?: Array<string | ChannelConfig>
   /**
    * TTL (ms) for the on-disk approval-status cache used by check/read/list-new.
    * Decided states (approved/denied) are cached this long to avoid re-checking
@@ -98,6 +144,41 @@ export function loadConfig(): Config {
   cfg.apiUrl = cfg.apiUrl.replace(/\/+$/, '')
   if (!Array.isArray(cfg.channels)) cfg.channels = ['imessage']
   return cfg
+}
+
+/**
+ * Normalize `cfg.channels` (which may mix legacy type-strings and instance
+ * objects) into a clean list of ChannelConfig instances. A bare string `s`
+ * becomes `{ id: s, type: s, name: s }` so old configs ("imessage") keep
+ * working. Entries without an id are dropped.
+ */
+export function normalizeChannels(
+  channels: Array<string | ChannelConfig> | undefined
+): ChannelConfig[] {
+  if (!Array.isArray(channels)) return []
+  const out: ChannelConfig[] = []
+  for (const c of channels) {
+    if (typeof c === 'string') {
+      const id = c.trim()
+      if (id) out.push({ id, type: id, name: id })
+    } else if (c && typeof c === 'object' && typeof c.id === 'string' && c.id.trim()) {
+      out.push({
+        id: c.id.trim(),
+        type: (c.type ?? c.id).trim(),
+        name: c.name ?? c.id,
+        auth: c.auth,
+      })
+    }
+  }
+  return out
+}
+
+/** Find a configured channel instance by its id (slug), or undefined. */
+export function findChannel(
+  cfg: Pick<Config, 'channels'>,
+  id: string
+): ChannelConfig | undefined {
+  return normalizeChannels(cfg.channels).find((c) => c.id === id)
 }
 
 /** Persist config back to disk (preserving 0600 perms). */

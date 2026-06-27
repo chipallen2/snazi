@@ -1,8 +1,7 @@
 import Link from 'next/link'
-import { getSupabase } from '@/lib/supabase'
 import { currentUserId } from '@/lib/currentUser'
-import { getSender } from '@/lib/data'
-import type { Channel, CheckStatus } from '@/lib/types'
+import { getSender, getChannelBySlug } from '@/lib/data'
+import type { CheckStatus } from '@/lib/types'
 import { normalizeAddress } from '@/lib/address'
 import { resolveDecideOwner } from '@/lib/session'
 import { decideStatus } from '../actions'
@@ -14,15 +13,14 @@ async function lookup(
   channel: string,
   sender: string
 ): Promise<{ status: CheckStatus; label: string | null; channelName: string }> {
-  const supabase = getSupabase()
-  const [existing, { data: channelRow }] = await Promise.all([
+  const [existing, channelRow] = await Promise.all([
     getSender(owner, channel, sender),
-    supabase.from('sna_channels').select('*').eq('id', channel).maybeSingle(),
+    getChannelBySlug(owner, channel),
   ])
   return {
     status: (existing?.status as CheckStatus) ?? 'unknown',
     label: existing?.label ?? null,
-    channelName: (channelRow as Channel)?.display_name ?? channel,
+    channelName: channelRow?.name ?? channel,
   }
 }
 
