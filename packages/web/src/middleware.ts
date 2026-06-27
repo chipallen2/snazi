@@ -59,6 +59,12 @@ function redirectToLogin(req: NextRequest, next: string): NextResponse {
 }
 
 export const config = {
-  // Match everything EXCEPT API routes, Next internals, and common static files.
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  // Match everything EXCEPT API routes, Next internals, and static assets.
+  // The trailing extension group keeps public files (logos) and the app-router
+  // icon routes (/icon.png, /apple-icon.png, favicon.ico) from being redirected
+  // to /login — which would 307 them and break <img>/next-image (the optimizer
+  // then 400s on the redirected source).
+  matcher: [
+    '/((?!api|_next/static|_next/image|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico|txt|xml|json|webmanifest)$).*)',
+  ],
 }

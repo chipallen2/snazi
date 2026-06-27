@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import Link from 'next/link'
 
 /* ----------------------------------------------------------------------------
@@ -50,16 +51,9 @@ function HeroMock() {
   const rows = [
     { name: 'Mom', addr: '+1 555 0182', state: 'allow' as const },
     { name: 'Riley (work)', addr: 'riley@acme.co', state: 'allow' as const },
-    { name: 'Unknown sender', addr: '+1 555 7741', state: 'block' as const },
   ]
   return (
     <div className="card relative w-full max-w-sm overflow-hidden p-5 shadow-lift">
-      <div className="flex items-center justify-between border-b border-stone-100 pb-3">
-        <span className="text-xs font-bold uppercase tracking-wide text-stone-400">
-          Who can reach your agent
-        </span>
-        <span className="pill bg-brand-50 text-brand-700">live</span>
-      </div>
       <ul className="divide-y divide-stone-100">
         {rows.map((r) => (
           <li key={r.name} className="flex items-center justify-between py-3">
@@ -99,7 +93,7 @@ export default function Landing() {
       <section className="relative overflow-hidden">
         <div className="pointer-events-none absolute inset-0 -z-10 bg-grid-faint [background-size:22px_22px] opacity-50" />
         <div className="pointer-events-none absolute -right-32 -top-40 -z-10 h-[34rem] w-[34rem] rounded-full bg-brand-200/25 blur-[120px]" />
-        <div className="container-wide grid items-center gap-12 py-16 sm:py-24 lg:grid-cols-2">
+        <div className="container-wide grid items-start gap-12 py-16 sm:py-24 lg:grid-cols-2">
           <div>
             <span className="eyebrow">Inbox bouncer for AI agents</span>
             <h1 className="mt-4 text-4xl font-extrabold leading-[1.05] tracking-tight text-ink sm:text-6xl">
@@ -108,11 +102,14 @@ export default function Landing() {
               for you.
             </h1>
             <p className="mt-5 max-w-md text-lg leading-relaxed text-stone-600">
-              snazi is the bouncer for your AI assistant&apos;s inbox. It always
-              tells your agent <span className="font-semibold text-ink">who</span>{' '}
-              reached out — but only hands over the message if{' '}
-              <span className="font-semibold text-ink">you&apos;ve approved</span>{' '}
-              that sender.
+              snazi — short for{' '}
+              <span className="font-semibold text-ink">Soup Nazi AI</span> — guards
+              the inbox your AI assistant reads. Your agent can see{' '}
+              <span className="font-semibold text-ink">who</span> messaged you, but
+              it can&apos;t read <span className="font-semibold text-ink">what</span>{' '}
+              they said until you approve that sender — so a stranger can never
+              slip instructions to your AI, and your private messages stay
+              private.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link href="/signup" className="btn-brand btn-lg shadow-glow">
@@ -139,7 +136,15 @@ export default function Landing() {
               Stores zero message content. An approve / deny list only.
             </p>
           </div>
-          <div className="flex justify-center lg:justify-end">
+          <div className="flex flex-col items-center gap-8">
+            <Image
+              src="/snazi-logo-text.png"
+              alt="snazi — No messages for you!"
+              width={800}
+              height={800}
+              priority
+              className="w-full max-w-[12.8rem] drop-shadow-[0_24px_60px_rgba(28,25,23,0.28)] sm:max-w-[16rem]"
+            />
             <HeroMock />
           </div>
         </div>
@@ -151,28 +156,29 @@ export default function Landing() {
           <div className="max-w-2xl">
             <span className="eyebrow">How it works</span>
             <h2 className="mt-3 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">
-              Your agent learns the name. You decide the rest.
+              Your agent sees who. You decide what it can read.
             </h2>
             <p className="mt-3 text-stone-500">
-              snazi sits between the world and your assistant, so a stranger
-              never gets a free pass to your conversations.
+              snazi sits between your messages and your AI assistant. Your agent
+              can always see who reached out, but it can only open a message once
+              you&apos;ve approved that sender.
             </p>
           </div>
           <div className="mt-12 grid gap-6 sm:grid-cols-3">
             <StepCard
               n="1"
-              title="Someone messages your agent"
-              body="A text or email lands. snazi captures who it's from — never the contents."
+              title="A message comes in"
+              body="Someone texts or emails you. snazi records who it's from — but not a word of what they said."
             />
             <StepCard
               n="2"
               title="snazi checks your list"
-              body="Approved senders pass. Unknown or blocked ones get held at the door."
+              body="If you've approved that sender, your agent can read the message. If not, it stays sealed."
             />
             <StepCard
               n="3"
-              title="You stay in control"
-              body="Approve a new sender with one tap from a signed link. Everyone else? No messages for you."
+              title="You approve in one tap"
+              body="snazi sends you a one-tap link to allow or block each new sender. Until you allow them: no messages for you."
             />
           </div>
         </div>
@@ -220,7 +226,7 @@ export default function Landing() {
       <section className="border-t border-stone-200/70 bg-ink">
         <div className="container-wide flex flex-col items-center gap-4 py-16 text-center sm:py-20">
           <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-400">
-            Privacy, not theater
+            No Messages in the Cloud
           </span>
           <h2 className="max-w-2xl text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
             We can&apos;t leak what we never store.
