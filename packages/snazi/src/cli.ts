@@ -51,6 +51,15 @@ import {
   remoteSend,
 } from './client'
 import { installDaemon, LABEL } from './daemon'
+import {
+  serviceStart,
+  serviceStop,
+  serviceRestart,
+  serviceStatus,
+  ensureServeToken,
+  writeServePid,
+  clearServePid,
+} from './service'
 import { runInit } from './init'
 import { runDoctor } from './doctor'
 
@@ -354,6 +363,7 @@ async function cmdInit(args: string[]): Promise<number> {
     channel: flag(args, '--channel'),
     force: hasFlag(args, '--force'),
     yes: hasFlag(args, '--yes') || hasFlag(args, '-y'),
+    serve: hasFlag(args, '--serve') || undefined,
   })
   out(result)
   return code
@@ -390,6 +400,7 @@ async function cmdServe(args: string[]): Promise<number> {
         port: r.port,
         node: r.node,
         cli: r.cli,
+        tip: "Prefer 'snazi start' / 'snazi stop' / 'snazi restart' — they install AND (un)load the service for you, cross-platform.",
         next_steps: [
           `launchctl load -w ${r.plistPath}`,
           `# stop:   launchctl unload -w ${r.plistPath}`,
@@ -406,9 +417,13 @@ async function cmdServe(args: string[]): Promise<number> {
 
   try {
     const { server } = await startServer(cfg, { bind, port })
+    // Record our PID so `snazi stop` can find us (used on Windows; harmless
+    // elsewhere where the service manager already tracks the process).
+    writeServePid()
     // Keep the process alive until signalled; shut down cleanly.
     return await new Promise<number>((resolve) => {
       const shutdown = () => {
+        clearServePid()
         server.close(() => resolve(0))
       }
       process.on('SIGINT', shutdown)
@@ -418,6 +433,73 @@ async function cmdServe(args: string[]): Promise<number> {
     out({ error: String(e instanceof Error ? e.message : e) })
     return 1
   }
+}
+
+async function cmdStart(args: string[]): Promise<number> {
+  const cfg = loadConfig()
+  const bind = flag(args, '--bind')
+  const port = parsePort(args)
+  let token: { token: string; generated: boolean }
+  try {
+    // serve needs a bearer token; mint + save one on first start.
+    token = ensureServeToken(cfg)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+  let res
+  try {
+    res = await serviceStart(cfg, { bind, port })
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+  if (token.generated) {
+    res.result.serveToken = token.token
+    const notes = Array.isArray(res.result.notes) ? (res.result.notes as string[]) : []
+    notes.unshift(
+      `Generated a serveToken and saved it to ${CONFIG_PATH}. Set this as 'remoteToken' on the agent host: ${token.token}`
+    )
+    res.result.notes = notes
+  }
+  out(res.result)
+  return res.code
+}
+
+async function cmdStop(): Promise<number> {
+  const res = serviceStop()
+  out(res.result)
+  return res.code
+}
+
+async function cmdRestart(args: string[]): Promise<number> {
+  const cfg = loadConfig()
+  const bind = flag(args, '--bind')
+  const port = parsePort(args)
+  let token: { token: string; generated: boolean }
+  try {
+    token = ensureServeToken(cfg)
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+  let res
+  try {
+    res = await serviceRestart(cfg, { bind, port })
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+  if (token.generated) {
+    res.result.serveToken = token.token
+    const notes = Array.isArray(res.result.notes) ? (res.result.notes as string[]) : []
+    notes.unshift(
+      `Generated a serveToken and saved it to ${CONFIG_PATH}. Set this as 'remoteToken' on the agent host: ${token.token}`
+    )
+    res.result.notes = notes
+  }
+  out(res.result)
+  return res.code
 }
 
 async function cmdRemoteListNew(args: string[]): Promise<number> {
@@ -556,6 +638,8 @@ async function cmdRemoteStatus(): Promise<number> {
 async function cmdStatus(): Promise<number> {
   const cfg = loadConfig()
   const reachable = await ping(cfg)
+  // Best-effort background-service readout (start/stop/restart). Never throws.
+  const service = await serviceStatus(cfg)
   out({
     config_path: CONFIG_PATH,
     platform: `${process.platform}/${process.arch}`,
@@ -564,17 +648,29 @@ async function cmdStatus(): Promise<number> {
     apiKey: cfg.apiKey ? `${cfg.apiKey.slice(0, 6)}…(${cfg.apiKey.length})` : null,
     channels: normalizeChannels(cfg.channels).map((c) => ({ id: c.id, type: c.type })),
     server_reachable: reachable,
+    service,
   })
   return reachable ? 0 : 1
 }
 
+function getVersion(): string {
+  try {
+    // dist/cli.js -> ../package.json
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return (require('../package.json').version as string) ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
 function usage(): void {
   console.log(
-    `snazi — on-demand message gate ("No messages for you.")
+    `snazi — message gate ("No messages for you.")  v${getVersion()}
 
 Setup:
-  snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--force] [--yes]
+  snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--serve] [--force] [--yes]
                                                         Create/update ~/.snazi/config.json (interactive if a TTY)
+                                                        --serve also installs + starts the background gate (see 'snazi start')
   snazi doctor                                          Diagnose Node, config, connectivity, and channel access
 
 Usage:
@@ -596,8 +692,15 @@ Approvals are READ-ONLY here: approve/deny a sender in the web dashboard or via
 a signed /decide link. The config token is a per-account READ token.
 
 Serve mode (least-privilege HTTP gate for a remote agent over a tailnet):
-  snazi serve [--bind <ip>] [--port <n>]                Start HTTP gate (/health,/list-new,/check,/read,POST /send)
-  snazi serve --install-daemon [--bind <ip>] [--port <n>]  Install the launchd LaunchAgent (RunAtLoad/KeepAlive)
+  snazi start [--bind <ip>] [--port <n>]                Run the gate in the background + auto-start at login (mac/Linux/Windows)
+  snazi stop                                            Stop the background gate and remove auto-start
+  snazi restart [--bind <ip>] [--port <n>]              Restart the background gate (picks up config changes)
+  snazi serve [--bind <ip>] [--port <n>]                Run the HTTP gate in the FOREGROUND (no background service)
+  snazi serve --install-daemon [--bind <ip>] [--port <n>]  (advanced) Write the launchd plist without loading it
+
+'snazi start' generates a serveToken if you don't have one, installs the right
+service for your OS (launchd / systemd --user / Task Scheduler), starts it, and
+checks /health. No launchctl/systemctl/schtasks commands to remember.
 
 Remote client (the trusted agent side, calls a remote 'snazi serve'):
   snazi remote-status                                   Probe remoteUrl /health
@@ -651,6 +754,15 @@ async function main(): Promise<void> {
     case 'serve':
       code = await cmdServe(rest)
       break
+    case 'start':
+      code = await cmdStart(rest)
+      break
+    case 'stop':
+      code = await cmdStop()
+      break
+    case 'restart':
+      code = await cmdRestart(rest)
+      break
     case 'remote-list-new':
       code = await cmdRemoteListNew(rest)
       break
@@ -671,6 +783,12 @@ async function main(): Promise<void> {
       break
     case 'remote-status':
       code = await cmdRemoteStatus()
+      break
+    case '-v':
+    case '--version':
+    case 'version':
+      console.log(getVersion())
+      code = 0
       break
     case undefined:
     case '-h':

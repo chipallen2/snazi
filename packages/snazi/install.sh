@@ -53,5 +53,7 @@ cat <<EOF
 Approvals are READ-ONLY here: approve/deny a sender in the dashboard or via a
 signed /decide link. The server stores no messages — only an approve/deny list.
 Serve mode (a least-privilege HTTP gate for a remote agent over a tailnet) is
-opt-in and macOS-only for the launchd daemon; see README.md.
+opt-in. Run it in the background with '$SNAZI start' (then 'stop' / 'restart');
+it sets up the right service for your OS (launchd / systemd --user / a Windows
+Scheduled Task). See README.md.
 EOF

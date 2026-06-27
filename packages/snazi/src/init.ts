@@ -22,6 +22,7 @@ import {
   readConfigIfPresent,
   saveConfig,
 } from './config'
+import { ensureServeToken, serviceStart } from './service'
 
 export interface InitArgs {
   apiUrl?: string
@@ -29,6 +30,12 @@ export interface InitArgs {
   channel?: string
   force?: boolean
   yes?: boolean
+  /**
+   * Set up the background serve gate (auto-start at login) as part of init.
+   * `true` always sets it up (non-interactive provisioning); `undefined` means
+   * "ask" in a TTY and "skip" otherwise.
+   */
+  serve?: boolean
 }
 
 /** Normalize a user-typed base URL: trim, drop trailing slash, default https. */
@@ -53,7 +60,8 @@ export async function runInit(
   const noFlags = !a.apiUrl && !a.token && !a.channel
 
   // Existing config + nothing to change + can't prompt -> no-op (don't clobber).
-  if (existing && !a.force && !interactive && noFlags) {
+  // `--serve` counts as "something to do", so it still sets up the background gate.
+  if (existing && !a.force && !interactive && noFlags && !a.serve) {
     return {
       code: 0,
       result: {
@@ -76,6 +84,12 @@ export async function runInit(
     const suffix = def ? ` [${def}]` : ''
     const ans = (await rl.question(`${q}${suffix}: `)).trim()
     return ans || def || ''
+  }
+  const askYesNo = async (q: string, def: boolean): Promise<boolean> => {
+    if (!rl) return def
+    const ans = (await rl.question(`${q}${def ? ' [Y/n]' : ' [y/N]'}: `)).trim().toLowerCase()
+    if (!ans) return def
+    return ans === 'y' || ans === 'yes'
   }
 
   try {
@@ -145,6 +159,38 @@ export async function runInit(
       )
     }
 
+    // Optional: set up the always-on background gate (serve mode) right here, so
+    // people who need a remote agent to reach this machine discover it without
+    // hunting for a hidden flag. Only runs when explicitly requested (--serve)
+    // or accepted at an interactive prompt — never silently under --yes/CI.
+    let serve: Record<string, unknown> | undefined
+    const wantServe =
+      a.serve === true ||
+      (interactive &&
+        a.serve === undefined &&
+        (await askYesNo(
+          'Run snazi in the background so an agent on ANOTHER computer can reach ' +
+            "this machine's messages (serve mode)? Most people can skip this",
+          false
+        )))
+    if (wantServe) {
+      const { token: serveToken, generated } = ensureServeToken(merged)
+      const res = await serviceStart(merged, {})
+      serve = { ...res.result }
+      if (generated) serve.serveToken = serveToken
+    }
+
+    const next_steps = [
+      'snazi doctor   # verify config, connectivity, and channel access',
+      'snazi list-new --since 120',
+    ]
+    if (!serve) {
+      next_steps.push(
+        '# Need an agent on ANOTHER computer to reach this one? Run it in the background:',
+        'snazi start    # installs + starts the gate, auto-starts at login (snazi stop/restart too)'
+      )
+    }
+
     return {
       code: 0,
       result: {
@@ -154,10 +200,8 @@ export async function runInit(
         apiKey: maskToken(token),
         channels: channels.map((c) => c.id),
         warnings: warnings.length ? warnings : undefined,
-        next_steps: [
-          'snazi doctor   # verify config, connectivity, and channel access',
-          'snazi list-new --since 120',
-        ],
+        serve,
+        next_steps,
       },
     }
   } finally {

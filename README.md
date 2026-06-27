@@ -78,8 +78,12 @@ gated operations over HTTP, reachable only on a private Tailscale tailnet:
 - Binds the **tailnet 100.x IP** (or `127.0.0.1` with `tailscale serve`),
   **never `0.0.0.0`**. Bearer token (`serveToken`) compared in constant time and
   never logged. `/read` enforces the **same approved-list gate** as the CLI.
-- Runs as a launchd LaunchAgent via `snazi serve --install-daemon`. The node
-  binary needs **Full Disk Access** to read `chat.db`.
+- Run it in the background with one command: **`snazi start`** (and `snazi stop`
+  / `snazi restart`). It installs the right OS service for you — launchd on
+  macOS, a systemd `--user` unit on Linux, a hidden Scheduled Task on Windows —
+  auto-starts it at login, mints a `serveToken` if you don't have one, and
+  checks `/health`. No `launchctl`/`systemctl`/`schtasks` to memorize. On macOS
+  the node binary still needs **Full Disk Access** to read `chat.db`.
 - Remote agent uses `snazi remote-list-new` / `remote-read` / `remote-check` /
   `remote-resolve` / `remote-label` / `remote-send` (config: `remoteUrl`,
   `remoteToken`) or plain `curl`.
@@ -150,6 +154,11 @@ npm install -g @chipallen2/snazi   # scoped package; the command is just `snazi`
 snazi init      # writes ~/.snazi/config.json (deployment URL + your READ token)
 snazi doctor    # verifies Node, config, connectivity, and channel access
 ```
+
+`snazi init` also offers to set up the always-on background gate (serve mode) for
+remote agents — or run it any time with **`snazi start`** (and `snazi stop` /
+`snazi restart`), which installs the right OS service for you. Most single-machine
+users can skip it.
 
 Prefer source? `git clone https://github.com/chipallen2/snazi.git && cd snazi/packages/snazi && ./install.sh`.
 

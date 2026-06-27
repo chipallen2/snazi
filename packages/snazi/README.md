@@ -20,9 +20,11 @@ agent invokes it when needed. It stores nothing locally and the server stores no
 message content. Message text is read live from the channel's local store (for
 iMessage, `~/Library/Messages/chat.db`) and printed only when the gate opens.
 
-**Optional serve mode** (`snazi serve` or `snazi serve --install-daemon`) runs a
-long-lived HTTP gate for remote agents over a private tailnet. See **Serve mode**
-below.
+**Optional serve mode** runs a long-lived HTTP gate for remote agents over a
+private tailnet. Run it in the background with one command — **`snazi start`**
+(plus `snazi stop` / `snazi restart`) — which installs the right OS service for
+you (launchd / systemd `--user` / a hidden Windows Scheduled Task). See **Serve
+mode** below.
 
 ## How the gate works
 
@@ -58,10 +60,14 @@ snazi doctor        # checks Node, config, connectivity, and channel access
 > just `snazi`. (The bare name `snazi` was too close to an existing npm package
 > to publish unscoped.)
 
-`snazi init` asks for two things: your **deployment URL** (default
-`https://snazi.dev`) and your **account READ token** (sign up at `/signup`, then
-copy it from the `/account` page). There is **no admin key** — approvals happen
-in the dashboard or via a signed `/decide` link. For agents/CI, skip the prompts:
+`snazi init` asks for your **deployment URL** (default `https://snazi.dev`) and
+your **account READ token** (sign up at `/signup`, then copy it from the
+`/account` page), and then — if you want an agent on another computer to reach
+this machine — offers to set up the always-on background gate for you (the same
+thing as `snazi start`; say no to skip, which is right for most people). There
+is **no admin key** — approvals happen in the dashboard or via a signed
+`/decide` link. For agents/CI, skip the prompts (add `--serve` to also install
+the background gate non-interactively):
 
 ```bash
 snazi init --api-url https://snazi.dev --token <READ_TOKEN> --yes
@@ -85,7 +91,7 @@ snazi init && snazi doctor
 
 | Command | What it does |
 | --- | --- |
-| `snazi init [--api-url <url>] [--token <tok>] [--channel <id>]` | Create or update `~/.snazi/config.json`. |
+| `snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--serve]` | Create or update `~/.snazi/config.json`. Offers to set up the background gate (or `--serve` to do it non-interactively). |
 | `snazi doctor` | Diagnose Node, config, connectivity, and channel access. |
 | `snazi list-new [--channel <id>] [--since <min>] [--fresh]` | Distinct inbound senders, counts, timestamps, approval status, display label, and local Contacts `contact_name`. **No text.** Default window 60 min. |
 | `snazi read <sender> [--channel <id>] [--since <min>] [--fresh]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
@@ -95,8 +101,11 @@ snazi init && snazi doctor
 | `snazi channels add <id> [--type <t>] [--name <n>] [auth flags]` | Configure a channel instance locally (see **Channels & email setup**). |
 | `snazi cache clear` | Drop cached approval statuses (force fresh checks after a revocation). |
 | `snazi status` | Config path, apiUrl, masked read token, channels, server reachability. |
-| `snazi serve [--bind <ip>] [--port <n>]` | Start the read-only HTTP gate (see **Serve mode** below). |
-| `snazi serve --install-daemon [--bind <ip>] [--port <n>]` | Install the launchd LaunchAgent for serve mode (macOS only). |
+| `snazi start [--bind <ip>] [--port <n>]` | Run the gate in the **background** and auto-start it at login (macOS/Linux/Windows). Mints a `serveToken` if missing and verifies `/health`. |
+| `snazi stop` | Stop the background gate and remove its auto-start entry. |
+| `snazi restart [--bind <ip>] [--port <n>]` | Restart the background gate (picks up config/bind/port changes). |
+| `snazi serve [--bind <ip>] [--port <n>]` | Run the read-only HTTP gate in the **foreground** (no background service). See **Serve mode** below. |
+| `snazi serve --install-daemon [--bind <ip>] [--port <n>]` | (advanced) Just write the launchd plist without loading it. Prefer `snazi start`. |
 | `snazi remote-status` | Probe a remote serve's `/health` (`remoteUrl`). |
 | `snazi remote-list-new [--channel <id>] [--since <min>]` | WHO messaged on the remote host + status + label. |
 | `snazi remote-check <sender> --channel <id>` | One sender's status and label, via remote serve. |
@@ -369,20 +378,66 @@ snazi serve
 snazi serve --bind 100.64.0.10 --port 8787
 ```
 
-### Run as a launchd service
+### Run it in the background (`start` / `stop` / `restart`)
+
+One command per OS — no service-manager incantations:
+
+```bash
+snazi start        # install + run in the background, auto-start at login
+snazi stop         # stop it and remove the auto-start entry
+snazi restart      # restart (e.g. after editing config or granting FDA)
+```
+
+> `snazi init` also **offers** to do this for you at the end of setup (or pass
+> `snazi init --serve` to set it up non-interactively), so you don't have to know
+> the command exists.
+
+`snazi start` figures out the right background service for your platform and
+manages it for you:
+
+| Platform | What `start` sets up | Auto-start | Restart-on-crash |
+| --- | --- | --- | --- |
+| **macOS** | launchd LaunchAgent (`~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist`) | at login | yes (KeepAlive) |
+| **Linux** | systemd `--user` unit (`~/.config/systemd/user/snazi.service`) | at login¹ | yes (`Restart=on-failure`) |
+| **Windows** | hidden Scheduled Task (`snazi-serve`, launched via `wscript`) | at logon | — |
+
+It also **mints a `serveToken`** for you if one isn't set (saved to
+`~/.snazi/config.json` and printed once — copy it to the agent host's
+`remoteToken`), then polls `/health` so it can tell you whether the gate
+actually came up. `snazi status` shows the live service state any time:
+
+```bash
+snazi status
+# { ..., "service": { "manager": "launchd", "installed": true,
+#   "state": "loaded", "bind": "100.x.y.z", "port": 8787,
+#   "healthy": true, "version": "0.2.1" } }
+```
+
+¹ A systemd `--user` service stops when you log out unless you enable lingering:
+`loginctl enable-linger $USER` (`snazi start` prints this hint).
+
+**macOS — Full Disk Access (required for iMessage).** A background launchd job
+runs in a context that cannot read `~/Library/Messages/chat.db` unless the
+**node binary** has Full Disk Access. `snazi start` prints the exact node path;
+add **that binary** (not just Terminal) in **System Settings → Privacy &
+Security → Full Disk Access**, then `snazi restart`. Without FDA, `/list-new`
+and `/read` return an FDA error — the gate still holds; you just get no data.
+(Gmail/Outlook channels are pure HTTPS and need no FDA, so serve mode is useful
+on Linux/Windows too.)
+
+<details>
+<summary>Advanced: manage launchd by hand</summary>
+
+`snazi serve --install-daemon` just writes the plist without loading it, for
+people who want to drive `launchctl` themselves:
 
 ```bash
 snazi serve --install-daemon            # writes ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist
-launchctl load -w ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist   # start (RunAtLoad + KeepAlive)
+launchctl load -w ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist   # start
 launchctl unload -w ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist # stop
 ```
 
-**Full Disk Access (required).** A launchd LaunchAgent runs in a context that
-cannot read `~/Library/Messages/chat.db` unless the **node binary** has Full
-Disk Access. `--install-daemon` prints the exact node path; add **that binary**
-(not just Terminal) in **System Settings → Privacy & Security → Full Disk
-Access**, then reload the agent. Without FDA, `/list-new` and `/read` return an
-FDA error — the gate still holds; you just get no data.
+</details>
 
 ### Calling it
 

@@ -225,7 +225,7 @@ the single-tenant `tenantId` gotcha) are in `packages/snazi/README.md` →
 - **`remote-list-new` returns empty or an FDA error:** the iMessage Mac (the
   serve host) likely lost **Full Disk Access** on its `node` binary. nvm changes
   the node path on every Node upgrade, which silently breaks FDA. Ask the owner
-  to re-grant Full Disk Access to the exact node binary printed by
-  `snazi serve --install-daemon`, then reload the LaunchAgent. The gate still
-  holds — you just get no data until FDA is restored.
+  to re-grant Full Disk Access to the exact node binary printed by `snazi start`
+  (under `node`), then run `snazi restart`. The gate still holds — you just get
+  no data until FDA is restored.
 - **`remote-status` not 200:** serve host or tailnet is down; notify the user.
