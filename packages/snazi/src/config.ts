@@ -147,6 +147,38 @@ export function loadConfig(): Config {
 }
 
 /**
+ * Load config for the AGENT MACHINE (the `remote-*` commands).
+ *
+ * Unlike loadConfig(), this does NOT require apiUrl/apiKey — an agent machine
+ * holds no channel credentials and needs only to know which messages machine to
+ * call (`remoteUrl`). It MAY also carry a read-only READ token (apiUrl/apiKey)
+ * so the agent can mint one-tap `/decide` approve links, but that's optional.
+ * The bearer token (`remoteToken`) is validated per-request by client.ts.
+ */
+export function loadRemoteConfig(): Config {
+  const cfg = readConfigIfPresent()
+  if (!cfg) {
+    console.error(
+      JSON.stringify({
+        error: `Config not found at ${CONFIG_PATH}. Run 'snazi init-agent' to set up this agent machine.`,
+      })
+    )
+    process.exit(2)
+  }
+  if (!cfg.remoteUrl) {
+    console.error(
+      JSON.stringify({
+        error:
+          "This machine isn't configured to reach a messages machine (no remoteUrl). " +
+          "Run 'snazi init-agent' here to point it at your messages machine.",
+      })
+    )
+    process.exit(2)
+  }
+  return cfg
+}
+
+/**
  * Normalize `cfg.channels` (which may mix legacy type-strings and instance
  * objects) into a clean list of ChannelConfig instances. A bare string `s`
  * becomes `{ id: s, type: s, name: s }` so old configs ("imessage") keep

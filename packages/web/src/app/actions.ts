@@ -9,7 +9,7 @@ import {
   verifySessionToken,
   resolveDecideOwner,
 } from '@/lib/session'
-import { upsertSender, deleteSender } from '@/lib/data'
+import { upsertSender, deleteSender, updateLabel } from '@/lib/data'
 import type { SenderStatus } from '@/lib/types'
 
 /**
@@ -122,5 +122,31 @@ export async function decideStatus(formData: FormData) {
 export async function removeSender(channel_id: string, sender_address: string) {
   const owner = await requireOwner()
   await deleteSender(owner, channel_id, normalizeAddress(sender_address))
+  revalidatePath('/')
+}
+
+const MAX_LABEL_LEN = 64
+// eslint-disable-next-line no-control-regex
+const LABEL_CTRL_RE = /[\u0000-\u001f\u007f]/
+
+/** Set or change the display name on an existing sender (never touches status). */
+export async function renameSender(
+  channel_id: string,
+  sender_address: string,
+  formData: FormData
+) {
+  const owner = await requireOwner()
+  const label = String(formData.get('label') || '').trim()
+  if (!label) return
+  if (label.length > MAX_LABEL_LEN) return
+  if (LABEL_CTRL_RE.test(label)) return
+
+  const updated = await updateLabel(
+    owner,
+    channel_id,
+    normalizeAddress(sender_address),
+    label
+  )
+  if (!updated) return
   revalidatePath('/')
 }

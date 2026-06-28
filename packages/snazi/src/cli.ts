@@ -29,6 +29,7 @@
  */
 import {
   loadConfig,
+  loadRemoteConfig,
   saveConfig,
   readConfigIfPresent,
   normalizeChannels,
@@ -60,7 +61,7 @@ import {
   writeServePid,
   clearServePid,
 } from './service'
-import { runInit } from './init'
+import { runInit, runInitAgent } from './init'
 import { runDoctor } from './doctor'
 
 const DEFAULT_CHANNEL = 'imessage'
@@ -369,6 +370,18 @@ async function cmdInit(args: string[]): Promise<number> {
   return code
 }
 
+async function cmdInitAgent(args: string[]): Promise<number> {
+  const { code, result } = await runInitAgent({
+    url: flag(args, '--url'),
+    token: flag(args, '--token'),
+    readToken: flag(args, '--read-token'),
+    apiUrl: flag(args, '--api-url'),
+    yes: hasFlag(args, '--yes') || hasFlag(args, '-y'),
+  })
+  out(result)
+  return code
+}
+
 async function cmdDoctor(): Promise<number> {
   const { code, report } = await runDoctor()
   out(report)
@@ -458,7 +471,7 @@ async function cmdStart(args: string[]): Promise<number> {
     res.result.serveToken = token.token
     const notes = Array.isArray(res.result.notes) ? (res.result.notes as string[]) : []
     notes.unshift(
-      `Generated a serveToken and saved it to ${CONFIG_PATH}. Set this as 'remoteToken' on the agent host: ${token.token}`
+      `Generated a connect token (serveToken) and saved it to ${CONFIG_PATH}. On your agent machine, run 'snazi init-agent' and give it this token: ${token.token}`
     )
     res.result.notes = notes
   }
@@ -494,7 +507,7 @@ async function cmdRestart(args: string[]): Promise<number> {
     res.result.serveToken = token.token
     const notes = Array.isArray(res.result.notes) ? (res.result.notes as string[]) : []
     notes.unshift(
-      `Generated a serveToken and saved it to ${CONFIG_PATH}. Set this as 'remoteToken' on the agent host: ${token.token}`
+      `Generated a connect token (serveToken) and saved it to ${CONFIG_PATH}. On your agent machine, run 'snazi init-agent' and give it this token: ${token.token}`
     )
     res.result.notes = notes
   }
@@ -505,7 +518,7 @@ async function cmdRestart(args: string[]): Promise<number> {
 async function cmdRemoteListNew(args: string[]): Promise<number> {
   const since = parseSince(args, 60)
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteListNew(cfg, channel, since)
     out(json)
@@ -525,7 +538,7 @@ async function cmdRemoteRead(args: string[]): Promise<number> {
   }
   const since = parseSince(args, 60)
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteRead(cfg, target, channel, since)
     out(json)
@@ -544,7 +557,7 @@ async function cmdRemoteCheck(args: string[]): Promise<number> {
     return 2
   }
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteCheck(cfg, target, channel)
     out(json)
@@ -561,7 +574,7 @@ async function cmdRemoteResolve(args: string[]): Promise<number> {
   const positionals = args.filter((a) => !a.startsWith('--'))
   const name = positionals[0] ?? ''
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteResolve(cfg, name, channel)
     out(json)
@@ -583,7 +596,7 @@ async function cmdRemoteLabel(args: string[]): Promise<number> {
     return 2
   }
   const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteLabel(cfg, target, channel, name)
     out(json)
@@ -612,7 +625,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
     out({ error: String(e instanceof Error ? e.message : e) })
     return 2
   }
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteSend(cfg, target, channel, text)
     out(json)
@@ -624,7 +637,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
 }
 
 async function cmdRemoteStatus(): Promise<number> {
-  const cfg = loadConfig()
+  const cfg = loadRemoteConfig()
   try {
     const { status, json } = await remoteHealth(cfg)
     out({ remoteUrl: cfg.remoteUrl ?? null, health_status: status, health: json })
@@ -669,8 +682,11 @@ function usage(): void {
 
 Setup:
   snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--serve] [--force] [--yes]
-                                                        Create/update ~/.snazi/config.json (interactive if a TTY)
+                                                        Set up the MESSAGES MACHINE (has your messages). Writes ~/.snazi/config.json
                                                         --serve also installs + starts the background gate (see 'snazi start')
+  snazi init-agent [--url <url>] [--token <tok>] [--read-token <tok>] [--api-url <url>] [--yes]
+                                                        Set up an AGENT MACHINE (runs your AI) to reach a messages machine's gate
+                                                        --read-token (read-only) lets the agent mint one-tap approve links itself
   snazi doctor                                          Diagnose Node, config, connectivity, and channel access
 
 Usage:
@@ -702,7 +718,7 @@ Serve mode (least-privilege HTTP gate for a remote agent over a tailnet):
 service for your OS (launchd / systemd --user / Task Scheduler), starts it, and
 checks /health. No launchctl/systemctl/schtasks commands to remember.
 
-Remote client (the trusted agent side, calls a remote 'snazi serve'):
+Agent machine (set up with 'snazi init-agent'; calls your messages machine's gate):
   snazi remote-status                                   Probe remoteUrl /health
   snazi remote-list-new [--channel <id>] [--since <min>]  WHO messaged on the remote host + status
   snazi remote-check <sender> --channel <id>            One sender's status (remote)
@@ -726,6 +742,9 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'init':
       code = await cmdInit(rest)
+      break
+    case 'init-agent':
+      code = await cmdInitAgent(rest)
       break
     case 'doctor':
       code = await cmdDoctor()

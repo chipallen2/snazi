@@ -20,11 +20,12 @@ agent invokes it when needed. It stores nothing locally and the server stores no
 message content. Message text is read live from the channel's local store (for
 iMessage, `~/Library/Messages/chat.db`) and printed only when the gate opens.
 
-**Optional serve mode** runs a long-lived HTTP gate for remote agents over a
-private tailnet. Run it in the background with one command — **`snazi start`**
-(plus `snazi stop` / `snazi restart`) — which installs the right OS service for
-you (launchd / systemd `--user` / a hidden Windows Scheduled Task). See **Serve
-mode** below.
+**Optional serve mode** runs a long-lived HTTP gate so your AI can run on a
+separate **agent machine** and reach this **messages machine** over a private
+tailnet. Run it in the background with one command — **`snazi start`** (plus
+`snazi stop` / `snazi restart`) — which installs the right OS service for you
+(launchd / systemd `--user` / a hidden Windows Scheduled Task). The agent
+machine is then set up with **`snazi init-agent`**. See **Serve mode** below.
 
 ## How the gate works
 
@@ -34,8 +35,8 @@ agent wants to know what's new
         ▼
   snazi list-new            ──►  reveals WHO + status + label (approved/denied/unknown)
         │                         (never the message text)
-        │  unknown sender? agent asks you: "approve +1555…?"
-        │  you approve in the dashboard, or by tapping a /decide link
+        │  unknown sender? agent texts you a one-tap /decide link
+        │  you tap Allow (or approve in the dashboard as a backup)
         ▼
   snazi read <sender>       ──►  CLI asks server: is this sender approved?
                                    ├─ approved → prints message text
@@ -62,16 +63,22 @@ snazi doctor        # checks Node, config, connectivity, and channel access
 
 `snazi init` asks for your **deployment URL** (default `https://snazi.dev`) and
 your **account READ token** (sign up at `/signup`, then copy it from the
-`/account` page), and then — if you want an agent on another computer to reach
-this machine — offers to set up the always-on background gate for you (the same
-thing as `snazi start`; say no to skip, which is right for most people). There
-is **no admin key** — approvals happen in the dashboard or via a signed
-`/decide` link. For agents/CI, skip the prompts (add `--serve` to also install
-the background gate non-interactively):
+`/account` page), and then — if you want your AI on a separate **agent machine**
+to reach this **messages machine** — offers to set up the always-on background
+gate for you (the same thing as `snazi start`; say no to skip, which is right for
+most people). There is **no admin key** — approvals happen in the dashboard or
+via a signed `/decide` link. For agents/CI, skip the prompts (add `--serve` to
+also install the background gate non-interactively):
 
 ```bash
 snazi init --api-url https://snazi.dev --token <READ_TOKEN> --yes
 ```
+
+> **Running your AI on a separate machine?** This `snazi init` sets up the
+> **messages machine**. On the **agent machine** (where your AI runs), install
+> snazi and run **`snazi init-agent`** instead — it asks for the messages
+> machine's URL + connect token + your READ token (so the agent can mint approve
+> links) and writes `~/.snazi/config.json` for you. See **Serve mode** below.
 
 **macOS only — Full Disk Access.** To read iMessage, grant Full Disk Access to
 your terminal (or the `node` binary) in System Settings → Privacy & Security →
@@ -91,7 +98,8 @@ snazi init && snazi doctor
 
 | Command | What it does |
 | --- | --- |
-| `snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--serve]` | Create or update `~/.snazi/config.json`. Offers to set up the background gate (or `--serve` to do it non-interactively). |
+| `snazi init [--api-url <url>] [--token <tok>] [--channel <id>] [--serve]` | Set up the **messages machine**. Create/update `~/.snazi/config.json`. Offers to set up the background gate (or `--serve` to do it non-interactively). |
+| `snazi init-agent [--url <url>] [--token <tok>] [--read-token <tok>] [--api-url <url>] [--yes]` | Set up an **agent machine**: writes `remoteUrl` + `remoteToken` + a read-only READ token (`--read-token`) so the agent can mint approve links, then pings the messages machine. No channel creds live here. |
 | `snazi doctor` | Diagnose Node, config, connectivity, and channel access. |
 | `snazi list-new [--channel <id>] [--since <min>] [--fresh]` | Distinct inbound senders, counts, timestamps, approval status, display label, and local Contacts `contact_name`. **No text.** Default window 60 min. |
 | `snazi read <sender> [--channel <id>] [--since <min>] [--fresh]` | Message text for one sender — **only if approved**. Otherwise errors with `No messages for you.` |
@@ -101,16 +109,16 @@ snazi init && snazi doctor
 | `snazi channels add <id> [--type <t>] [--name <n>] [auth flags]` | Configure a channel instance locally (see **Channels & email setup**). |
 | `snazi cache clear` | Drop cached approval statuses (force fresh checks after a revocation). |
 | `snazi status` | Config path, apiUrl, masked read token, channels, server reachability. |
-| `snazi start [--bind <ip>] [--port <n>]` | Run the gate in the **background** and auto-start it at login (macOS/Linux/Windows). Mints a `serveToken` if missing and verifies `/health`. |
+| `snazi start [--bind <ip>] [--port <n>]` | Run the gate in the **background** and auto-start it at login (macOS/Linux/Windows). Mints a connect token (`serveToken`) if missing and verifies `/health`. |
 | `snazi stop` | Stop the background gate and remove its auto-start entry. |
 | `snazi restart [--bind <ip>] [--port <n>]` | Restart the background gate (picks up config/bind/port changes). |
 | `snazi serve [--bind <ip>] [--port <n>]` | Run the read-only HTTP gate in the **foreground** (no background service). See **Serve mode** below. |
 | `snazi serve --install-daemon [--bind <ip>] [--port <n>]` | (advanced) Just write the launchd plist without loading it. Prefer `snazi start`. |
-| `snazi remote-status` | Probe a remote serve's `/health` (`remoteUrl`). |
-| `snazi remote-list-new [--channel <id>] [--since <min>]` | WHO messaged on the remote host + status + label. |
-| `snazi remote-check <sender> --channel <id>` | One sender's status and label, via remote serve. |
-| `snazi remote-read <sender> [--channel <id>] [--since <min>]` | Message text via remote serve — only if approved. |
-| `snazi remote-send <recipient> --text <message> [--channel <id>]` | Send a message via remote serve — never gated. |
+| `snazi remote-status` | Probe the messages machine's `/health` (`remoteUrl`). |
+| `snazi remote-list-new [--channel <id>] [--since <min>]` | WHO messaged on the messages machine + status + label. |
+| `snazi remote-check <sender> --channel <id>` | One sender's status and label, via the messages machine. |
+| `snazi remote-read <sender> [--channel <id>] [--since <min>]` | Message text via the messages machine — only if approved. |
+| `snazi remote-send <recipient> --text <message> [--channel <id>]` | Send a message via the messages machine — never gated. |
 | `snazi remote-resolve [<name>] --channel <id>` | Resolve a name → sender address(es). Empty name = full address book. |
 | `snazi remote-label <sender> --name <name> --channel <id>` | Set a sender's display label (UPDATE-only; cannot open the gate). |
 
@@ -158,9 +166,9 @@ A channel lives in two places:
 1. **On the server (dashboard → Channels):** register the channel's **name +
    type**. The server generates the slug and shows it. This is what gives the
    channel its own list. **No credentials are ever stored on the server.**
-2. **On this CLI machine (`~/.snazi/config.json`):** the channel's **id (= that
-   slug), type, and credentials**. The id must match the dashboard slug so the
-   gate checks the right list.
+2. **On the messages machine (`~/.snazi/config.json`):** the channel's **id (=
+   that slug), type, and credentials**. The id must match the dashboard slug so
+   the gate checks the right list.
 
 `config.json` `channels` is an array of instances:
 
@@ -206,7 +214,7 @@ snazi send "alice@example.com" --channel gmail-work \
 a `Subject: …` line followed by a blank line (as above); otherwise the subject
 defaults to `(no subject)`.
 
-### Credentials live ONLY on this machine
+### Credentials live ONLY on the messages machine
 
 OAuth tokens / secrets are written to `~/.snazi/config.json` (created `0600`) and
 are **never** sent to the snazi server. You can hand-edit that file, or set them
@@ -218,6 +226,12 @@ snazi channels add gmail-work --type gmail --name Work \
 ```
 
 ### Gmail (Gmail API + OAuth2)
+
+New to Google OAuth? n8n has an excellent step-by-step walkthrough for creating
+the Cloud project, OAuth consent screen, and client credentials:
+[**docs.n8n.io → Google OAuth2 (Custom OAuth2)**](https://docs.n8n.io/integrations/builtin/credentials/google/oauth-single-service#custom-oauth2).
+Follow it to get your **client id**, **client secret**, and **refresh token**,
+then come back here. The snazi-specific bits:
 
 1. In Google Cloud Console: create a project, enable the **Gmail API**, and
    create an **OAuth client** (Desktop app gives you a client id + secret).
@@ -232,6 +246,12 @@ snazi channels add gmail-work --type gmail --name Work \
    ```
 
 ### Outlook / Microsoft 365 (Microsoft Graph + OAuth2)
+
+New to Azure OAuth? n8n has a step-by-step walkthrough for registering the app
+and generating a client secret:
+[**docs.n8n.io → Microsoft credentials**](https://docs.n8n.io/integrations/builtin/credentials/microsoft).
+Follow it to get your **client id** and **client secret**, then come back here.
+The snazi-specific bits:
 
 1. In the Azure portal: register an app, add a client secret, and grant the
    delegated scopes `offline_access` + mail read/send (`Mail.Read` or
@@ -261,14 +281,14 @@ credentials are configured and the adapter is usable on this machine.
 
 ## Serve mode — least-privilege HTTP gate over a tailnet
 
-Sometimes the agent that wants to triage messages runs on a *different* machine
-than the one signed into iMessage. SSH would work, but SSH grants a **full shell** —
-far more than "let me read approved messages." `snazi serve` exposes **only** the
-gated, read-only operations over HTTP so a remote trusted agent gets least
-privilege.
+Sometimes your AI runs on a *different* machine (the **agent machine**) than the
+one signed into iMessage (the **messages machine**). SSH would work, but SSH
+grants a **full shell** — far more than "let me read approved messages." `snazi
+serve` exposes **only** the gated, read-only operations over HTTP so the agent
+machine gets least privilege.
 
 ```
-  Agent host (remote client)                     Serve host (iMessage Mac)
+  Agent machine (snazi init-agent)               Messages machine (iMessage Mac)
   ┌────────────────────┐   Tailscale tailnet   ┌──────────────────────┐
   │ snazi remote-read   │ ───── HTTP ─────────► │ snazi serve           │
   │   (bearer token)    │   100.x:8787          │  /health  (no auth)   │
@@ -306,8 +326,8 @@ params → `400`. Unsupported methods → `405`.
 ### `contact_name` — local macOS Contacts enrichment (display only)
 
 `/list-new`, `/check`, `/resolve` (and the `200` body of `/read`) include a
-`contact_name` for each sender: the matching name from the serve host's **local
-macOS Contacts** (AddressBook), looked up by phone/email. It is attached for
+`contact_name` for each sender: the matching name from the messages machine's
+**local macOS Contacts** (AddressBook), looked up by phone/email. It is attached for
 **every** sender **regardless of approval status**, so you can see *who* an
 `unknown`/`denied` caller is without reading their messages.
 
@@ -323,8 +343,8 @@ macOS Contacts** (AddressBook), looked up by phone/email. It is attached for
 - **Degrades silently.** If Contacts is unreadable (no permission, non-macOS,
   native module missing), `contact_name` is simply `null` and nothing breaks.
 
-**Contacts access on the serve host.** Reading the AddressBook DB needs the node
-binary to have **Contacts** access (or **Full Disk Access**, which already
+**Contacts access on the messages machine.** Reading the AddressBook DB needs the
+node binary to have **Contacts** access (or **Full Disk Access**, which already
 covers the AddressBook database). Full Disk Access is the simplest option since
 you already grant it for iMessage; without it `contact_name` just stays `null`.
 
@@ -349,7 +369,8 @@ you already grant it for iMessage; without it `contact_name` just stays `null`.
 
 ### Config keys
 
-Add to `~/.snazi/config.json` on the **serve host**:
+On the **messages machine**, `snazi start` mints `serveToken` for you. To set
+keys by hand in `~/.snazi/config.json`:
 
 ```json
 {
@@ -359,14 +380,24 @@ Add to `~/.snazi/config.json` on the **serve host**:
 }
 ```
 
-And on the **agent host** (remote client):
+On the **agent machine**, `snazi init-agent` writes these for you (or set them
+by hand):
 
 ```json
 {
   "remoteUrl": "http://100.64.0.10:8787",
-  "remoteToken": "<same value as serveToken on the serve host>"
+  "remoteToken": "<same value as serveToken on the messages machine>",
+  "apiUrl": "https://snazi.dev",
+  "apiKey": "<your READ token>"
 }
 ```
+
+`apiUrl` + `apiKey` hold your **READ token** so the agent can mint one-tap
+approve links itself — `snazi init-agent` asks for it (or pass `--read-token
+<tok>`). The READ token is read-only: it can check the list and mint links, but
+can't read content or approve/deny, so it can't open the gate. If you leave it
+out, the agent still reads approved messages but you approve new senders by hand
+in the dashboard.
 
 ### Run it
 
@@ -401,9 +432,9 @@ manages it for you:
 | **Linux** | systemd `--user` unit (`~/.config/systemd/user/snazi.service`) | at login¹ | yes (`Restart=on-failure`) |
 | **Windows** | hidden Scheduled Task (`snazi-serve`, launched via `wscript`) | at logon | — |
 
-It also **mints a `serveToken`** for you if one isn't set (saved to
-`~/.snazi/config.json` and printed once — copy it to the agent host's
-`remoteToken`), then polls `/health` so it can tell you whether the gate
+It also **mints a connect token (`serveToken`)** for you if one isn't set (saved
+to `~/.snazi/config.json` and printed once — give it to the agent machine via
+`snazi init-agent`), then polls `/health` so it can tell you whether the gate
 actually came up. `snazi status` shows the live service state any time:
 
 ```bash
@@ -441,7 +472,7 @@ launchctl unload -w ~/Library/LaunchAgents/com.soup-nazi.snazi-serve.plist # sto
 
 ### Calling it
 
-From the remote agent, either use the thin client subcommands:
+From the agent machine, either use the thin client subcommands:
 
 ```bash
 snazi remote-status

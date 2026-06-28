@@ -3,6 +3,7 @@ import { listSenders, listChannels } from '@/lib/data'
 import type { Channel, Sender } from '@/lib/types'
 import { addSender, setStatus, removeSender } from './actions'
 import Landing from './landing'
+import { SenderLabelEditor } from './sender-label-editor'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,20 +35,23 @@ function SenderRow({
 }) {
   const isApproved = s.status === 'approved'
   const primary = s.label || s.sender_address
-  const sub = s.label ? s.sender_address : null
 
   return (
     <li className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-stone-50/60">
-      <div className="min-w-0">
-        <div className="truncate font-semibold text-ink">{primary}</div>
-        <div className="flex flex-wrap items-center gap-x-2 text-xs text-stone-500">
-          {sub && <span className="font-mono">{sub}</span>}
-          {showChannel && (
+      <div className="min-w-0 flex-1">
+        <SenderLabelEditor
+          key={`${s.id}-${s.label ?? ''}`}
+          channelId={s.channel_id}
+          senderAddress={s.sender_address}
+          label={s.label}
+        />
+        {showChannel && (
+          <div className="mt-1 text-xs text-stone-500">
             <span className="rounded bg-stone-100 px-1.5 py-0.5">
               {channelName(channels, s.channel_id)}
             </span>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
