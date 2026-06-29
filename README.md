@@ -2,7 +2,7 @@
 
 > No messages for you.
 
-**Live at [snazi.dev](https://snazi.dev)** — a hosted allow list (Supabase). Your messages never go there.
+![Snazi Logo](https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75)
 
 ---
 
