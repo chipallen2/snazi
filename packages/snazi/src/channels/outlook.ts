@@ -214,6 +214,7 @@ export const outlookAdapter: ChannelAdapter = {
           subject,
           body: { contentType: 'Text', content: body },
           toRecipients: [{ emailAddress: { address: recipient } }],
+          ...(ctx.auth.user ? { from: { emailAddress: { address: ctx.auth.user } } } : {}),
         },
         saveToSentItems: true,
       }),
