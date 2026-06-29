@@ -1,8 +1,9 @@
 # Soup Nazi AI — snazi
 
 > No messages for you.
-
-![Snazi Logo](https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75)
+<p align="center">
+  <img src="[docs/snazi-logo-text.png](https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75)" alt="Snazi" width="300">
+</p>
 
 ---
 
