@@ -116,7 +116,7 @@ export async function decideStatus(formData: FormData) {
   })
   const displayName = label || sender_address
   if (displayName) params.set('name', displayName)
-  redirect(`/?${params.toString()}`)
+  redirect(`/decide?${params.toString()}`)
 }
 
 export async function removeSender(channel_id: string, sender_address: string) {

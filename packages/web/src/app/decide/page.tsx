@@ -5,6 +5,7 @@ import type { CheckStatus } from '@/lib/types'
 import { normalizeAddress } from '@/lib/address'
 import { resolveDecideOwner } from '@/lib/session'
 import { decideStatus } from '../actions'
+import { CloseButton } from './CloseButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,8 +60,66 @@ export default async function Decide({
     label?: string
     exp?: string
     sig?: string
+    done?: string
+    name?: string
   }
 }) {
+  // ── Success state ────────────────────────────────────────────────────────
+  if (searchParams.done === 'allow' || searchParams.done === 'block') {
+    const allowed = searchParams.done === 'allow'
+    const sessionUserId = await currentUserId()
+    return (
+      <div className="container-app flex flex-1 flex-col items-center justify-center space-y-8 py-12">
+        <div className="flex flex-col items-center gap-4">
+          <p
+            className={`text-4xl font-extrabold tracking-widest ${
+              allowed ? 'text-emerald-600' : 'text-red-600'
+            }`}
+          >
+            {allowed ? 'ALLOWED' : 'BLOCKED'}
+          </p>
+          {allowed ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-24 w-24 text-emerald-500"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-24 w-24 text-red-500"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          )}
+        </div>
+        <CloseButton />
+        {sessionUserId && (
+          <Link
+            href="/"
+            className="text-sm font-semibold text-stone-400 hover:text-stone-700"
+          >
+            ← All senders
+          </Link>
+        )}
+      </div>
+    )
+  }
+
   const channel = (searchParams.channel || 'imessage').trim() || 'imessage'
   const sender = normalizeAddress(searchParams.sender || '')
   const passedLabel = (searchParams.label || '').trim()
