@@ -17,6 +17,9 @@ import type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  MessageAction,
+  MessageActionParams,
+  MessageActionResult,
   MessageRow,
   SenderSummary,
 } from './types'
@@ -73,6 +76,79 @@ async function graphGet<T>(accessToken: string, url: string): Promise<T> {
     throw new Error(`Graph GET failed: HTTP ${res.status} ${body.slice(0, 200)}`)
   }
   return res.json() as Promise<T>
+}
+
+async function graphPost<T>(
+  accessToken: string,
+  url: string,
+  body: unknown
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Graph POST failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+  }
+  return res.json().catch(() => ({})) as Promise<T>
+}
+
+async function graphPatch(accessToken: string, url: string, body: unknown): Promise<void> {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Graph PATCH failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+  }
+}
+
+async function graphDelete(accessToken: string, url: string): Promise<void> {
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Graph DELETE failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+  }
+}
+
+/** Perform one Graph action on a single message id. */
+async function actOnMessage(
+  accessToken: string,
+  action: MessageAction,
+  id: string
+): Promise<void> {
+  const enc = encodeURIComponent(id)
+  switch (action) {
+    case 'archive':
+      await graphPost(accessToken, `${GRAPH}/me/messages/${enc}/move`, {
+        destinationId: 'archive',
+      })
+      return
+    case 'delete':
+      await graphDelete(accessToken, `${GRAPH}/me/messages/${enc}`)
+      return
+    case 'markRead':
+      await graphPatch(accessToken, `${GRAPH}/me/messages/${enc}`, { isRead: true })
+      return
+    case 'markUnread':
+      await graphPatch(accessToken, `${GRAPH}/me/messages/${enc}`, { isRead: false })
+      return
+    default:
+      throw new Error(`Unsupported action: ${String(action)}`)
+  }
 }
 
 function isoSince(sinceMinutes: number): string {
@@ -223,5 +299,50 @@ export const outlookAdapter: ChannelAdapter = {
       const errBody = await res.text().catch(() => '')
       throw new Error(`Outlook send failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
     }
+  },
+
+  async performMessageAction(
+    ctx: ChannelContext,
+    action: MessageAction,
+    params: MessageActionParams
+  ): Promise<MessageActionResult> {
+    const accessToken = await token(ctx)
+
+    // Single-message targeting: act directly on the given id.
+    if (params.messageId) {
+      await actOnMessage(accessToken, action, params.messageId)
+      return { affected: 1 }
+    }
+
+    // Sender targeting: fetch matching inbox message ids, then act on each.
+    if (params.sender) {
+      const addr = params.sender.toLowerCase()
+      const since = isoSince(params.sinceMinutes ?? 1440)
+      // No $orderby — Graph rejects filter-on-from + orderby-on-receivedDateTime.
+      const url = graphUrl('/me/mailFolders/inbox/messages', {
+        $select: 'id,from,receivedDateTime',
+        $top: String(MAX_LIST),
+        $filter: `from/emailAddress/address eq '${odataString(addr)}' and receivedDateTime ge ${since}`,
+      })
+      const res = await graphGet<{ value?: GraphMessage[] }>(accessToken, url)
+      const ids = (res.value ?? []).map((m) => m.id).filter((id): id is string => Boolean(id))
+      let affected = 0
+      const errors: string[] = []
+      for (const id of ids) {
+        try {
+          await actOnMessage(accessToken, action, id)
+          affected += 1
+        } catch (e) {
+          errors.push(String(e instanceof Error ? e.message : e))
+        }
+      }
+      // Surface partial failures but don't throw if at least some succeeded.
+      if (errors.length > 0 && affected === 0) {
+        throw new Error(`All ${errors.length} action(s) failed. First: ${errors[0]}`)
+      }
+      return { affected, ...(errors.length ? { failed: errors.length } : {}) } as MessageActionResult
+    }
+
+    throw new Error('performMessageAction requires either sender or messageId.')
   },
 }

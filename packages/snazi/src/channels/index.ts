@@ -131,10 +131,42 @@ export function resolveSendableAdapter(
   return { adapter, ctx }
 }
 
+/**
+ * Resolve a channel id to an adapter that can perform message ACTIONS
+ * (archive/delete/mark read-unread) on this host. Never throws. Actions are
+ * never gated by the approval list — the soup nazi only blocks reading.
+ */
+export function resolveActionableAdapter(
+  channel: string,
+  cfg?: Pick<Config, 'channels'>
+): ResolvedAdapter {
+  const ctx = buildContext(channel, cfg)
+  const adapter = getAdapter(ctx.type)
+  if (!adapter) {
+    return { error: unknownChannelError(channel) }
+  }
+  if (!adapter.performMessageAction) {
+    return { error: `Channel '${channel}' does not support message actions.` }
+  }
+  const availability = adapter.availability(ctx)
+  if (!availability.available) {
+    const detail = availability.detail ? ` ${availability.detail}` : ''
+    return {
+      error: `Channel '${channel}' is not available on this machine: ${
+        availability.reason ?? 'unavailable'
+      }.${detail}`,
+    }
+  }
+  return { adapter, ctx }
+}
+
 export type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  MessageAction,
+  MessageActionParams,
+  MessageActionResult,
   SenderSummary,
   MessageRow,
 } from './types'

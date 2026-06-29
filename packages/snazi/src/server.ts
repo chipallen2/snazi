@@ -14,6 +14,7 @@
  *   GET  /resolve?name&channel       -> name->address address book   (bearer)
  *   POST /label {sender,channel,name}-> set a sender's display label (bearer)
  *   POST /send  {recipient,channel,text} -> send a message (bearer, never gated)
+ *   POST /action {sender,channel,action,sinceMinutes?} -> perform action (bearer, never gated)
  *
  * It REUSES the same gate (api.ts) and the same DB reader (chatdb.ts) as the
  * CLI. There is no approve/deny here — APPROVAL mutations stay CLI/dashboard-
@@ -28,7 +29,11 @@ import * as os from 'os'
 import type { Config } from './config'
 import { listSenders, setLabel, buildLabelMap, type CheckStatus, type SenderRecord } from './api'
 import { checkSenderCached } from './cache'
-import { resolveReadableAdapter, resolveSendableAdapter } from './channels'
+import {
+  resolveReadableAdapter,
+  resolveSendableAdapter,
+  resolveActionableAdapter,
+} from './channels'
 import { normalizeAddress, validateRecipientAddress } from './address'
 import { MAX_MESSAGE_LEN } from './imessage-send'
 import { buildContactIndex, type ContactIndex } from './contacts'
@@ -69,8 +74,9 @@ const MAX_SINCE_MIN = 7 * 24 * 60 // 7 days
 const DEFAULT_SINCE_MIN = 60
 const MAX_SENDER_LEN = 128
 const MAX_NAME_LEN = 64
-// Cap POST bodies hard: /label only needs a few short fields.
-const MAX_BODY_BYTES = 4 * 1024
+// Cap POST bodies hard: /label only needs a few short fields. /action carries
+// a slightly larger body (sender + action + window), so allow up to 8 KiB.
+const MAX_BODY_BYTES = 8 * 1024
 const CHANNEL_RE = /^[a-z0-9_-]+$/i
 // iMessage senders are phone numbers (+1555…) or emails. Keep it tight.
 const SENDER_RE = /^[A-Za-z0-9_.+@-]+$/
@@ -449,6 +455,86 @@ async function handleSend(
   }
 }
 
+const VALID_ACTIONS = new Set(['archive', 'delete', 'markRead', 'markUnread'])
+
+/** Parse + validate an action id from a request body. */
+function parseAction(v: unknown): 'archive' | 'delete' | 'markRead' | 'markUnread' {
+  const a = typeof v === 'string' ? v.trim() : ''
+  if (!VALID_ACTIONS.has(a)) {
+    throw new Error('Invalid action. Use archive | delete | markRead | markUnread.')
+  }
+  return a as 'archive' | 'delete' | 'markRead' | 'markUnread'
+}
+
+/** Parse an optional adapter-native message id. */
+function parseMessageId(v: unknown): string | undefined {
+  if (v == null) return undefined
+  const raw = String(v).trim()
+  if (!raw) return undefined
+  if (raw.length > 512) throw new Error('messageId too long.')
+  if (TEXT_CTRL_RE.test(raw)) throw new Error('Invalid messageId.')
+  return raw
+}
+
+/**
+ * POST /action  body: { sender?, messageId?, channel, action, sinceMinutes? }
+ * Performs an action (archive/delete/markRead/markUnread) on one or more
+ * messages. NEVER gated by the approval list — the soup nazi only blocks
+ * reading. Requires either `sender` or `messageId` to target messages.
+ */
+async function handleAction(
+  cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as {
+    sender?: unknown
+    messageId?: unknown
+    channel?: unknown
+    action?: unknown
+    sinceMinutes?: unknown
+  }
+  const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
+  const action = parseAction(b.action)
+  const messageId = parseMessageId(b.messageId)
+  // Sender is optional (sender XOR messageId targeting). When present, validate
+  // it the same way as elsewhere; when absent, require a messageId.
+  const sender =
+    typeof b.sender === 'string' && b.sender.trim()
+      ? parseSender(b.sender)
+      : undefined
+  if (!sender && !messageId) {
+    return { status: 400, body: { error: 'Provide either sender or messageId.' } }
+  }
+  const sinceMinutes =
+    b.sinceMinutes == null || b.sinceMinutes === ''
+      ? undefined
+      : parseSince(String(b.sinceMinutes))
+
+  const { adapter, ctx, error } = resolveActionableAdapter(channel, cfg)
+  if (!adapter?.performMessageAction || !ctx) {
+    return { status: 501, body: { error } }
+  }
+  try {
+    const { affected } = await adapter.performMessageAction(ctx, action, {
+      sender,
+      messageId,
+      sinceMinutes,
+    })
+    return { status: 200, body: { ok: true, channel, action, affected } }
+  } catch (e) {
+    return {
+      status: 502,
+      body: { error: String(e instanceof Error ? e.message : e) },
+    }
+  }
+}
+
 /** Build (but do not start) the HTTP server. Exposed for tests. */
 export function createServer(cfg: Config): http.Server {
   const token = cfg.serveToken ?? ''
@@ -466,7 +552,7 @@ export function createServer(cfg: Config): http.Server {
           return sendJson(res, 200, { ok: true, version: VERSION })
         }
 
-        // Only GET (reads) and POST /label, POST /send are allowed on this surface.
+        // Only GET (reads) and POST /label, /send, /action are allowed on this surface.
         if (method !== 'GET' && method !== 'POST') {
           return sendJson(res, 405, { error: 'Method not allowed.' })
         }
@@ -485,6 +571,10 @@ export function createServer(cfg: Config): http.Server {
           }
           if (pathname === '/send') {
             const r = await handleSend(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
+          if (pathname === '/action') {
+            const r = await handleAction(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
           return sendJson(res, 404, { error: 'Not found.' })
@@ -551,7 +641,16 @@ export async function startServer(
       bind,
       port,
       version: VERSION,
-      surface: ['/health', '/list-new', '/check', '/read', '/resolve', 'POST /label', 'POST /send'],
+      surface: [
+        '/health',
+        '/list-new',
+        '/check',
+        '/read',
+        '/resolve',
+        'POST /label',
+        'POST /send',
+        'POST /action',
+      ],
       reachable_on:
         bind === '127.0.0.1'
           ? 'loopback only (front with `tailscale serve` for tailnet access)'

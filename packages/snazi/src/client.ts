@@ -152,6 +152,27 @@ export async function remoteSend(
   return postJson(url, token, '/send', { recipient, channel, text })
 }
 
+/**
+ * Perform a message action (archive/delete/markRead/markUnread) via the remote
+ * serve POST /action endpoint. NEVER gated — actions don't require approval.
+ * Target with either `sender` (all matching messages in the window) or
+ * `messageId` (one message).
+ */
+export async function remoteAction(
+  cfg: Config,
+  params: { sender?: string; messageId?: string; channel: string; action: string; sinceMinutes?: number }
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const body: Record<string, unknown> = {
+    channel: params.channel,
+    action: params.action,
+  }
+  if (params.sender) body.sender = params.sender
+  if (params.messageId) body.messageId = params.messageId
+  if (params.sinceMinutes != null) body.sinceMinutes = params.sinceMinutes
+  return postJson(url, token, '/action', body)
+}
+
 /** Connectivity probe against a remote serve `/health`. */
 export async function remoteHealth(
   cfg: Config

@@ -34,6 +34,22 @@ export interface ChannelAvailability {
  * carries that instance's id/name and its LOCAL credentials so "Personal" and
  * "Work" gmail read different mailboxes. Credentials never leave this machine.
  */
+/** Supported action ids for performMessageAction */
+export type MessageAction = 'archive' | 'delete' | 'markRead' | 'markUnread'
+
+export interface MessageActionParams {
+  /** Apply action to all messages from this sender (in the given window). */
+  sender?: string
+  /** Apply action to a single message by adapter-native id. */
+  messageId?: string
+  /** How far back to look when using sender-based targeting (default 1440 min = 24h). */
+  sinceMinutes?: number
+}
+
+export interface MessageActionResult {
+  affected: number
+}
+
 export interface ChannelContext {
   /** Instance slug (the `--channel` value), e.g. 'gmail-work'. */
   id: string
@@ -78,4 +94,13 @@ export interface ChannelAdapter {
    * soup nazi only blocks reading. Throws on failure.
    */
   sendMessage?(ctx: ChannelContext, recipient: string, text: string): Promise<void>
+  /**
+   * Perform an action on one or more messages. NEVER gated — actions don't
+   * require sender approval. Throws on failure.
+   */
+  performMessageAction?(
+    ctx: ChannelContext,
+    action: MessageAction,
+    params: MessageActionParams
+  ): Promise<MessageActionResult>
 }

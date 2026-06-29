@@ -50,6 +50,7 @@ import {
   remoteResolve,
   remoteLabel,
   remoteSend,
+  remoteAction,
 } from './client'
 import { installDaemon, LABEL } from './daemon'
 import {
@@ -636,6 +637,45 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   }
 }
 
+async function cmdRemoteAction(args: string[]): Promise<number> {
+  // First positional after `remote-action` is the action id.
+  const positionals = args.filter((a) => !a.startsWith('--'))
+  const action = positionals[0]
+  const validActions = ['archive', 'delete', 'markRead', 'markUnread']
+  if (!action || !validActions.includes(action)) {
+    out({
+      error:
+        'Usage: snazi remote-action <archive|delete|markRead|markUnread> ' +
+        '(--sender <addr> | --message-id <id>) --channel <id> [--since <min>]',
+    })
+    return 2
+  }
+  const rawSender = flag(args, '--sender')
+  const messageId = flag(args, '--message-id')
+  if (!rawSender && !messageId) {
+    out({ error: 'Provide --sender <addr> or --message-id <id>.' })
+    return 2
+  }
+  const sender = rawSender ? normalizeAddress(rawSender) : undefined
+  const channel = flag(args, '--channel') ?? DEFAULT_CHANNEL
+  const since = hasFlag(args, '--since') ? parseSince(args, 1440) : undefined
+  const cfg = loadRemoteConfig()
+  try {
+    const { status, json } = await remoteAction(cfg, {
+      sender,
+      messageId,
+      channel,
+      action,
+      sinceMinutes: since,
+    })
+    out(json)
+    return status >= 200 && status < 300 ? 0 : 1
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdRemoteStatus(): Promise<number> {
   const cfg = loadRemoteConfig()
   try {
@@ -726,6 +766,8 @@ Agent machine (set up with 'snazi init-agent'; calls your messages machine's gat
   snazi remote-send <recipient> --text <msg> [--channel <id>]  Send a message (remote; never gated)
   snazi remote-resolve [<name>] [--channel <id>]        Resolve a name → sender address(es) (empty = address book)
   snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
+  snazi remote-action <archive|delete|markRead|markUnread> (--sender <addr> | --message-id <id>) [--channel <id>] [--since <min>]
+                                                        Perform a message action (remote; never gated)
 
 The server manages an approve/deny list only. It stores no messages.
 Reading is gated; sending is not. serve binds the tailnet IP (100.x) or
@@ -790,6 +832,9 @@ async function main(): Promise<void> {
       break
     case 'remote-send':
       code = await cmdRemoteSend(rest)
+      break
+    case 'remote-action':
+      code = await cmdRemoteAction(rest)
       break
     case 'remote-check':
       code = await cmdRemoteCheck(rest)
