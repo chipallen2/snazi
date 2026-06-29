@@ -2,7 +2,7 @@
 
 > No messages for you.
 <p align="center">
-  <img src="[docs/snazi-logo-text.png](https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75)" alt="Snazi" width="300">
+  <img src="https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75" alt="Snazi" width="300">
 </p>
 
 ---
