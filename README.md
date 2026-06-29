@@ -5,8 +5,6 @@
   <img src="https://snazi.dev/_next/image?url=%2Fsnazi-logo-text.png&w=828&q=75" alt="Snazi" width="300">
 </p>
 
----
-
 ## What is this?
 
 **Soup Nazi AI (snazi)** is a safety layer for AI agents that read your messages (iMessage, Gmail, Outlook, and more).
