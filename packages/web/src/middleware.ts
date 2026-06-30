@@ -35,6 +35,9 @@ export async function middleware(req: NextRequest) {
 
   if (pathname === '/decide') {
     if (hasSession) return NextResponse.next()
+    // Success state after a decide action — no auth needed, just show result.
+    const done = searchParams.get('done')
+    if (done === 'allow' || done === 'block') return NextResponse.next()
     const owner = (searchParams.get('owner') || '').trim()
     const channel = (searchParams.get('channel') || 'imessage').trim() || 'imessage'
     const sender = normalizeAddress(searchParams.get('sender'))
