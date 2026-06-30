@@ -1,10 +1,10 @@
 import Link from 'next/link'
 import { currentUserId } from '@/lib/currentUser'
-import { getSender, getChannelBySlug } from '@/lib/data'
+import { getSenderExact, getChannelBySlug } from '@/lib/data'
 import type { CheckStatus } from '@/lib/types'
-import { normalizeAddress } from '@/lib/address'
+import { normalizeAddress, extractEmailDomain, domainWildcard } from '@/lib/address'
 import { resolveDecideOwner } from '@/lib/session'
-import { decideStatus } from '../actions'
+import { decideStatus, decideDomainStatus } from '../actions'
 import { CloseButton } from './CloseButton'
 
 export const dynamic = 'force-dynamic'
@@ -12,16 +12,29 @@ export const dynamic = 'force-dynamic'
 async function lookup(
   owner: string,
   channel: string,
-  sender: string
-): Promise<{ status: CheckStatus; label: string | null; channelName: string }> {
-  const [existing, channelRow] = await Promise.all([
-    getSender(owner, channel, sender),
+  sender: string,
+  domain: string | null
+): Promise<{
+  status: CheckStatus
+  label: string | null
+  channelName: string
+  domainStatus: CheckStatus
+}> {
+  // Look up the EXACT sender row (no wildcard fallback) so the per-sender pill
+  // reflects the individual decision, and SEPARATELY the domain wildcard's own
+  // status, so the page can show both scopes independently.
+  const [existing, channelRow, wildcardRow] = await Promise.all([
+    getSenderExact(owner, channel, sender),
     getChannelBySlug(owner, channel),
+    domain
+      ? getSenderExact(owner, channel, domainWildcard(domain))
+      : Promise.resolve(null),
   ])
   return {
     status: (existing?.status as CheckStatus) ?? 'unknown',
     label: existing?.label ?? null,
     channelName: channelRow?.name ?? channel,
+    domainStatus: (wildcardRow?.status as CheckStatus) ?? 'unknown',
   }
 }
 
@@ -182,10 +195,21 @@ export default async function Decide({
     )
   }
 
-  const { status, label, channelName } = await lookup(owner, channel, sender)
+  // Domain wildcard is only meaningful for emails (phones have no domain).
+  const domain = extractEmailDomain(sender)
+  const { status, label, channelName, domainStatus } = await lookup(
+    owner,
+    channel,
+    sender,
+    domain
+  )
   const displayLabel = label || passedLabel
   const primary = displayLabel || sender
   const sub = displayLabel ? sender : null
+  // A domain-wide ALLOW is fail-open, so it's only offered to an authenticated
+  // session that owns this list — never from a forwardable one-tap link alone.
+  // (Mirrors the server guard in decideDomainStatus.)
+  const canAllowDomain = !!sessionUserId && sessionUserId === owner
 
   return (
     <div className="container-app flex flex-1 flex-col items-center justify-center space-y-5 py-12">
@@ -246,6 +270,73 @@ export default async function Decide({
             no decision) means their messages stay private.
           </p>
         </div>
+
+        {/* Domain-wide section (emails only) ------------------------------- */}
+        {domain && (
+          <div className="border-t border-stone-100 bg-stone-50/60 px-6 py-5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                Everyone @{domain}
+              </p>
+              <StatusPill status={domainStatus} />
+            </div>
+            <p className="mt-1 text-xs text-stone-400">
+              Apply one decision to <span className="font-medium">all</span>{' '}
+              senders from this domain. A decision on the individual address
+              above always overrides this.
+            </p>
+            <div
+              className={`mt-3 grid gap-2 ${
+                canAllowDomain ? 'grid-cols-2' : 'grid-cols-1'
+              }`}
+            >
+              {/* Allowing a WHOLE domain opens the gate for every sender on it,
+                  so it's gated behind an authenticated session (not a
+                  forwardable one-tap link). Block is always offered — tightening
+                  the gate is safe from any valid link. */}
+              {canAllowDomain && (
+                <form action={decideDomainStatus}>
+                  <input type="hidden" name="owner" value={owner} />
+                  <input type="hidden" name="channel_id" value={channel} />
+                  <input type="hidden" name="original_sender" value={sender} />
+                  <input type="hidden" name="domain" value={domain} />
+                  <input type="hidden" name="exp" value={exp} />
+                  <input type="hidden" name="sig" value={sig} />
+                  <input type="hidden" name="status" value="approved" />
+                  <button
+                    type="submit"
+                    className="btn w-full border border-emerald-200 bg-white py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 active:bg-emerald-100"
+                  >
+                    Allow whole domain
+                  </button>
+                </form>
+              )}
+              <form action={decideDomainStatus}>
+                <input type="hidden" name="owner" value={owner} />
+                <input type="hidden" name="channel_id" value={channel} />
+                <input type="hidden" name="original_sender" value={sender} />
+                <input type="hidden" name="domain" value={domain} />
+                <input type="hidden" name="exp" value={exp} />
+                <input type="hidden" name="sig" value={sig} />
+                <input type="hidden" name="status" value="denied" />
+                <button
+                  type="submit"
+                  className="btn w-full border border-red-200 bg-white py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 active:bg-red-100"
+                >
+                  Block whole domain
+                </button>
+              </form>
+            </div>
+            {!canAllowDomain && (
+              <p className="mt-2 text-center text-[11px] text-stone-400">
+                <Link href="/login" className="font-semibold underline hover:text-stone-600">
+                  Sign in
+                </Link>{' '}
+                to allow an entire domain.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <BackLink />

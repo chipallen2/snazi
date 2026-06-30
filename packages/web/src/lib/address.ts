@@ -88,3 +88,23 @@ export function validateRecipientAddress(raw: string | null | undefined): string
   }
   return normalized
 }
+
+/**
+ * Extract the domain from an email address, e.g. "user@google.com" →
+ * "google.com". Returns null for non-emails (no '@') or a missing/blank domain.
+ * Lower-cased + trimmed so it keys identically to normalizeAddress output.
+ */
+export function extractEmailDomain(address: string): string | null {
+  const at = address.indexOf('@')
+  if (at < 0) return null
+  const domain = address.slice(at + 1).toLowerCase().trim()
+  return domain || null
+}
+
+/**
+ * The wildcard sender_address for a domain, e.g. "google.com" → "*@google.com".
+ * Stored in sna_senders.sender_address to approve/deny an ENTIRE domain at once.
+ */
+export function domainWildcard(domain: string): string {
+  return `*@${domain.toLowerCase().trim()}`
+}

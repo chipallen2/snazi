@@ -7,6 +7,7 @@
  * a forgotten owner filter can never leak one tenant's list to another.
  */
 import { getSupabase } from './supabase'
+import { extractEmailDomain, domainWildcard } from './address'
 import type { Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
 
 function assertOwner(ownerId: string): void {
@@ -201,7 +202,15 @@ export async function listSenders(
   return rows
 }
 
-/** A single sender's approval status for one owner. */
+/**
+ * A single sender's approval status for one owner.
+ *
+ * Two-step lookup: an EXACT sender_address match always wins; if there is no
+ * exact row and the address is an email, fall back to a domain wildcard
+ * (`*@domain`). This lets an owner approve/deny a whole domain at once while
+ * still letting a per-sender decision override it (e.g. block *@google.com but
+ * allow one trusted person@google.com).
+ */
 export async function checkSender(
   ownerId: string,
   channel: string,
@@ -209,20 +218,80 @@ export async function checkSender(
 ): Promise<CheckStatus> {
   assertOwner(ownerId)
   const supabase = getSupabase()
+
+  // Candidate addresses: the exact sender + (for emails) its domain wildcard.
+  const candidates: string[] = [address]
+  const domain = extractEmailDomain(address)
+  // Guard: a wildcard's own domain wildcard would be itself; don't duplicate.
+  if (domain && domainWildcard(domain) !== address) {
+    candidates.push(domainWildcard(domain))
+  }
+
   const { data, error } = await supabase
     .from('sna_senders')
-    .select('status,owner_id')
+    .select('status,sender_address,owner_id')
     .eq('owner_id', ownerId)
     .eq('channel_id', channel)
-    .eq('sender_address', address)
-    .maybeSingle()
+    .in('sender_address', candidates)
   if (error) throw new Error(error.message)
-  assertRowOwned(data as { owner_id?: string } | null, ownerId)
-  return (data?.status as CheckStatus) ?? 'unknown'
+
+  const rows =
+    (data as { status: string; sender_address: string; owner_id: string }[]) ?? []
+  for (const row of rows) assertRowOwned(row, ownerId)
+
+  // Exact match wins over the domain wildcard.
+  const exact = rows.find((r) => r.sender_address === address)
+  if (exact) return exact.status as CheckStatus
+  const wildcard = rows.find((r) => r.sender_address !== address)
+  if (wildcard) return wildcard.status as CheckStatus
+  return 'unknown'
 }
 
-/** Fetch one full sender row for one owner (or null). */
+/**
+ * Fetch one full sender row for one owner (or null).
+ *
+ * Mirrors checkSender's precedence: returns the EXACT row when present,
+ * otherwise (for emails) the domain-wildcard row, otherwise null. Callers use
+ * this to render status; keeping the precedence identical to checkSender means
+ * the dashboard/decide UI can never disagree with the gate.
+ */
 export async function getSender(
+  ownerId: string,
+  channel: string,
+  address: string
+): Promise<Sender | null> {
+  assertOwner(ownerId)
+  const supabase = getSupabase()
+
+  const candidates: string[] = [address]
+  const domain = extractEmailDomain(address)
+  if (domain && domainWildcard(domain) !== address) {
+    candidates.push(domainWildcard(domain))
+  }
+
+  const { data, error } = await supabase
+    .from('sna_senders')
+    .select('*')
+    .eq('owner_id', ownerId)
+    .eq('channel_id', channel)
+    .in('sender_address', candidates)
+  if (error) throw new Error(error.message)
+
+  const rows = (data as Sender[]) ?? []
+  for (const row of rows) assertRowOwned(row, ownerId)
+
+  const exact = rows.find((r) => r.sender_address === address)
+  if (exact) return exact
+  const wildcard = rows.find((r) => r.sender_address !== address)
+  return wildcard ?? null
+}
+
+/**
+ * Fetch the EXACT sender row for one owner (no domain-wildcard fallback).
+ * Used where the UI needs the literal row for a specific address — e.g. to show
+ * the domain wildcard's OWN status independently of any per-sender row.
+ */
+export async function getSenderExact(
   ownerId: string,
   channel: string,
   address: string

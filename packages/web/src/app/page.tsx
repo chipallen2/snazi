@@ -34,17 +34,35 @@ function SenderRow({
   showChannel: boolean
 }) {
   const isApproved = s.status === 'approved'
-  const primary = s.label || s.sender_address
+  // Domain wildcards are stored as `*@domain` — surface them as a whole-domain
+  // rule rather than a literal address.
+  const isDomain = s.sender_address.startsWith('*@')
+  const domain = isDomain ? s.sender_address.slice(2) : null
+  const primary = s.label || (isDomain ? `@${domain}` : s.sender_address)
 
   return (
     <li className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-stone-50/60">
       <div className="min-w-0 flex-1">
-        <SenderLabelEditor
-          key={`${s.id}-${s.label ?? ''}`}
-          channelId={s.channel_id}
-          senderAddress={s.sender_address}
-          label={s.label}
-        />
+        {isDomain ? (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className="truncate font-semibold text-ink"
+              title={`Everyone @${domain}`}
+            >
+              @{domain}
+            </span>
+            <span className="pill bg-stone-200 px-2 py-0.5 text-[11px] font-semibold text-stone-600">
+              🌐 All senders
+            </span>
+          </div>
+        ) : (
+          <SenderLabelEditor
+            key={`${s.id}-${s.label ?? ''}`}
+            channelId={s.channel_id}
+            senderAddress={s.sender_address}
+            label={s.label}
+          />
+        )}
         {showChannel && (
           <div className="mt-1 text-xs text-stone-500">
             <span className="rounded bg-stone-100 px-1.5 py-0.5">
