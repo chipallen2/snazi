@@ -77,6 +77,7 @@ const MAX_NAME_LEN = 64
 // Cap POST bodies hard: /label only needs a few short fields. /action carries
 // a slightly larger body (sender + action + window), so allow up to 8 KiB.
 const MAX_BODY_BYTES = 8 * 1024
+const MAX_LABEL_BODY_BYTES = 4 * 1024 // /label only needs a few short fields
 const CHANNEL_RE = /^[a-z0-9_-]+$/i
 // iMessage senders are phone numbers (+1555…) or emails. Keep it tight.
 const SENDER_RE = /^[A-Za-z0-9_.+@-]+$/
@@ -564,7 +565,7 @@ export function createServer(cfg: Config): http.Server {
         }
 
         if (method === 'POST') {
-          const rawBody = await readBody(req, MAX_BODY_BYTES)
+          const rawBody = await readBody(req, pathname === '/label' ? MAX_LABEL_BODY_BYTES : MAX_BODY_BYTES)
           if (pathname === '/label') {
             const r = await handleLabel(cfg, rawBody)
             return sendJson(res, r.status, r.body)
