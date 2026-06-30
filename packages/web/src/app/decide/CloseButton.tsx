@@ -1,16 +1,29 @@
 'use client'
 
+import { useState } from 'react'
+
 export function CloseButton() {
+  const [fallback, setFallback] = useState(false)
+
   function handleClose() {
-    // Reassociate as script-opened before closing — works cross-browser
-    // for tabs that were navigated to directly (e.g. tapped from email).
+    // Works when the tab was opened by a native app (iOS Mail, Messages, etc.)
+    // or any script-opened context. Modern desktop browsers block it for
+    // direct-navigation tabs — detect that and show a friendly fallback.
     window.open('', '_self', '')
     window.close()
-    // Fallback: if still here after 300ms, navigate to blank
+    // If still here after a tick, the browser blocked the close — show message.
     setTimeout(() => {
-      document.body.innerHTML =
-        '<div style="font-family:sans-serif;text-align:center;padding:4rem;color:#666">You can close this tab.</div>'
-    }, 300)
+      if (!window.closed) setFallback(true)
+    }, 150)
+  }
+
+  if (fallback) {
+    return (
+      <div className="flex flex-col items-center gap-2 text-center">
+        <p className="text-lg font-semibold text-stone-700">You can close this tab.</p>
+        <p className="text-sm text-stone-400">Your browser blocked automatic close.</p>
+      </div>
+    )
   }
 
   return (
