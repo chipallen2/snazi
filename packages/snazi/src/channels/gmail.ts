@@ -125,15 +125,19 @@ function extractBody(payload: GmailPart | undefined): string {
   const decode = (data?: string): string =>
     data ? Buffer.from(data, 'base64url').toString('utf8') : ''
 
-  // Direct body on a text part.
-  if (payload.mimeType === 'text/plain' && payload.body?.data) {
-    return decode(payload.body.data)
-  }
+  // Direct body on a text part. Prefer text/html (htmlToText now preserves
+  // links as [text](url), so unsubscribe URLs survive) over text/plain.
   if (payload.mimeType === 'text/html' && payload.body?.data) {
     return htmlToText(decode(payload.body.data))
   }
-  // Multipart: prefer a text/plain descendant, else fall back to text/html.
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    return decode(payload.body.data)
+  }
+  // Multipart: prefer a text/html descendant (keeps links), else text/plain.
   const parts = payload.parts ?? []
+  for (const p of parts) {
+    if (p.mimeType === 'text/html' && p.body?.data) return htmlToText(decode(p.body.data))
+  }
   for (const p of parts) {
     if (p.mimeType === 'text/plain' && p.body?.data) return decode(p.body.data)
   }
