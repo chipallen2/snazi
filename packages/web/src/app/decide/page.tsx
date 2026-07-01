@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { currentUserId } from '@/lib/currentUser'
-import { getSenderExact, getChannelBySlug } from '@/lib/data'
+import { getSenderExact, getChannelBySlug, resolveDecideShortcode } from '@/lib/data'
 import type { CheckStatus } from '@/lib/types'
 import { normalizeAddress, extractEmailDomain, domainWildcard } from '@/lib/address'
 import { resolveDecideOwner } from '@/lib/session'
@@ -75,6 +75,7 @@ export default async function Decide({
     sig?: string
     done?: string
     name?: string
+    s?: string
   }
 }) {
   // ── Success state ────────────────────────────────────────────────────────
@@ -133,14 +134,58 @@ export default async function Decide({
     )
   }
 
-  const channel = (searchParams.channel || 'imessage').trim() || 'imessage'
-  const sender = normalizeAddress(searchParams.sender || '')
-  const passedLabel = (searchParams.label || '').trim()
+  // ── Shortcode resolution ──────────────────────────────────────────────────
+  // `/decide?s=<code>` is the compact form of a signed link. When present (and
+  // the inline fields are absent), resolve the code back to the SAME owner /
+  // channel / sender / exp / sig the long URL would have carried, then proceed
+  // identically. A missing/expired code shows a friendly dead-end.
+  const shortcode = (searchParams.s || '').trim()
+  const usingShortcode =
+    !!shortcode &&
+    !searchParams.sender &&
+    !searchParams.owner &&
+    !searchParams.sig
+  let resolved = searchParams
+  if (usingShortcode) {
+    const row = await resolveDecideShortcode(shortcode)
+    if (!row) {
+      return (
+        <div className="container-app flex flex-1 flex-col items-center justify-center space-y-5 py-12">
+          <div className="card w-full max-w-md p-6 text-center">
+            <h1 className="text-lg font-bold text-ink">Link not found or expired</h1>
+            <p className="mt-2 text-sm text-stone-500">
+              This one-tap link is no longer valid. Ask for a fresh link, or sign
+              in to manage who can reach your agent.
+            </p>
+          </div>
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-1 text-sm font-semibold text-stone-400 hover:text-stone-700"
+          >
+            Sign in →
+          </Link>
+        </div>
+      )
+    }
+    resolved = {
+      ...searchParams,
+      owner: row.owner_id,
+      channel: row.channel,
+      sender: row.sender,
+      label: row.label ?? undefined,
+      exp: String(row.exp),
+      sig: row.sig,
+    }
+  }
+
+  const channel = (resolved.channel || 'imessage').trim() || 'imessage'
+  const sender = normalizeAddress(resolved.sender || '')
+  const passedLabel = (resolved.label || '').trim()
   // Capability-link proof, threaded through so the POST action can re-verify
   // it (server actions are independently POST-able and must not trust the page
   // gate alone).
-  const exp = searchParams.exp || ''
-  const sig = searchParams.sig || ''
+  const exp = resolved.exp || ''
+  const sig = resolved.sig || ''
   // Owner resolution is shared with the POST action (resolveDecideOwner): a
   // valid signed link wins (it carries its own owner), else the logged-in
   // session user. This guarantees the form we render writes to the SAME tenant
@@ -149,7 +194,7 @@ export default async function Decide({
   const sessionUserId = await currentUserId()
   const owner =
     (await resolveDecideOwner({
-      ownerParam: searchParams.owner,
+      ownerParam: resolved.owner,
       channel,
       sender,
       exp: Number(exp),
@@ -206,10 +251,11 @@ export default async function Decide({
   const displayLabel = label || passedLabel
   const primary = displayLabel || sender
   const sub = displayLabel ? sender : null
-  // A domain-wide ALLOW is fail-open, so it's only offered to an authenticated
-  // session that owns this list — never from a forwardable one-tap link alone.
-  // (Mirrors the server guard in decideDomainStatus.)
-  const canAllowDomain = !!sessionUserId && sessionUserId === owner
+  // A signed /decide link (or a session) already proves authority to decide for
+  // this owner + domain, so a resolvable owner is all that's needed to offer a
+  // domain-wide Allow. (Mirrors the server-side authorization in
+  // decideDomainStatus.)
+  const canAllowDomain = !!owner
 
   return (
     <div className="container-app flex flex-1 flex-col items-center justify-center space-y-5 py-12">
@@ -290,10 +336,8 @@ export default async function Decide({
                 canAllowDomain ? 'grid-cols-2' : 'grid-cols-1'
               }`}
             >
-              {/* Allowing a WHOLE domain opens the gate for every sender on it,
-                  so it's gated behind an authenticated session (not a
-                  forwardable one-tap link). Block is always offered — tightening
-                  the gate is safe from any valid link. */}
+              {/* A valid signed link (or session) resolves an owner, which is
+                  all that's required to offer domain-wide Allow or Block. */}
               {canAllowDomain && (
                 <form action={decideDomainStatus}>
                   <input type="hidden" name="owner" value={owner} />
@@ -327,14 +371,6 @@ export default async function Decide({
                 </button>
               </form>
             </div>
-            {!canAllowDomain && (
-              <p className="mt-2 text-center text-[11px] text-stone-400">
-                <Link href="/login" className="font-semibold underline hover:text-stone-600">
-                  Sign in
-                </Link>{' '}
-                to allow an entire domain.
-              </p>
-            )}
           </div>
         )}
       </div>

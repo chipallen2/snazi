@@ -38,6 +38,14 @@ export async function middleware(req: NextRequest) {
     // Success state after a decide action — no auth needed, just show result.
     const done = searchParams.get('done')
     if (done === 'allow' || done === 'block') return NextResponse.next()
+    // Shortcode form (`/decide?s=<code>`): the code is an opaque handle whose
+    // signed fields live server-side, so we can't HMAC-verify it at the edge
+    // without a DB lookup. Defer to the page, which resolves the code and
+    // re-verifies the stored signature (showing a friendly dead-end for a
+    // missing/expired/forged code). A bare, unresolvable code renders no
+    // working form, so passing it through leaks nothing.
+    const shortcode = (searchParams.get('s') || '').trim()
+    if (shortcode) return NextResponse.next()
     const owner = (searchParams.get('owner') || '').trim()
     const channel = (searchParams.get('channel') || 'imessage').trim() || 'imessage'
     const sender = normalizeAddress(searchParams.get('sender'))

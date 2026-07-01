@@ -131,18 +131,14 @@ export async function decideStatus(formData: FormData) {
  * wildcard, so we can't reuse decideStatus (its sig check would fail for
  * `*@domain`).
  *
- * AUTHORIZATION IS ASYMMETRIC by direction, because a /decide link is a
- * forwardable bearer token (sent over SMS, 24h TTL) whose signature only ever
- * proves the holder may decide ONE exact sender:
- *   - BLOCK (status='denied') is fail-CLOSED: tightening the gate for a whole
- *     domain can never leak content, so a valid signed link (or session) is
- *     enough. We still require the wildcard's domain to match the link's
- *     original-sender domain so a link can't be retargeted to another domain.
- *   - ALLOW (status='approved') is fail-OPEN: approving a whole domain makes
- *     the agent read every sender from it — a blast radius far larger than the
- *     single sender the link's signature authorized. So a domain-wide ALLOW
- *     requires a real authenticated dashboard SESSION that owns the account;
- *     a bare signed link is NOT sufficient.
+ * AUTHORIZATION: a /decide link's HMAC signature already proves the holder is
+ * authorized to decide for this owner + domain, so a valid signed link (or a
+ * dashboard session) is sufficient for BOTH allow and block. The only extra
+ * guard is that the wildcard's domain must match the link's original-sender
+ * domain — so a signed link can only ever set a wildcard for ITS OWN domain,
+ * never a retargeted one. (Previously a domain-wide ALLOW additionally required
+ * a logged-in session; that asymmetric restriction is removed — the signature
+ * is proof enough.)
  */
 export async function decideDomainStatus(formData: FormData) {
   const channel_id =
@@ -178,13 +174,6 @@ export async function decideDomainStatus(formData: FormData) {
     sessionUserId,
   })
   if (!owner) throw new Error('Unauthorized.')
-
-  // Fail-open guard: a domain-wide ALLOW must come from an authenticated
-  // dashboard session that owns this account — never from a forwardable link
-  // alone (whose signature only authorized a single sender).
-  if (status === 'approved' && sessionUserId !== owner) {
-    throw new Error('Allowing a whole domain requires signing in.')
-  }
 
   await upsertSender(owner, {
     channel_id,

@@ -10,6 +10,18 @@ import { getSupabase } from './supabase'
 import { extractEmailDomain, domainWildcard } from './address'
 import type { Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
 
+/**
+ * Thrown when a shortcode INSERT hits the primary-key unique constraint (two
+ * random codes collided). Callers catch this specifically to retry with a
+ * freshly generated code, rather than surfacing a 500 for a benign collision.
+ */
+export class ShortcodeCollisionError extends Error {
+  constructor(message = 'Shortcode already exists.') {
+    super(message)
+    this.name = 'ShortcodeCollisionError'
+  }
+}
+
 function assertOwner(ownerId: string): void {
   if (!ownerId || typeof ownerId !== 'string') {
     throw new Error('ownerId is required for every sender query.')
@@ -390,4 +402,78 @@ export async function updateLabel(
   if (!data || data.length === 0) return null
   assertRowOwned(data[0] as { owner_id?: string } | null, ownerId)
   return data[0] as Sender
+}
+
+// ---------------------------------------------------------------------------
+// /decide shortcodes — short handles that map back to a signed capability link.
+// These carry NO extra authority: the stored sig is re-verified downstream, so
+// a shortcode grants exactly what the long inline link would have.
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist a shortcode → signed-decide mapping. Throws ShortcodeCollisionError
+ * on a primary-key conflict (duplicate code) so the caller can retry with a new
+ * code; any other DB error is rethrown as a generic Error.
+ */
+export async function createDecideShortcode(input: {
+  code: string
+  owner_id: string
+  channel: string
+  sender: string
+  label?: string | null
+  exp: number
+  sig: string
+}): Promise<void> {
+  const supabase = getSupabase()
+  const { error } = await supabase.from('sna_decide_shortcodes').insert({
+    code: input.code,
+    owner_id: input.owner_id,
+    channel: input.channel,
+    sender: input.sender,
+    label: input.label ?? null,
+    exp: input.exp,
+    sig: input.sig,
+  })
+  if (error) {
+    // Postgres unique_violation → a code collision; signal it distinctly so the
+    // caller retries rather than 500ing on a benign, rare event.
+    if ((error as { code?: string }).code === '23505') {
+      throw new ShortcodeCollisionError(error.message)
+    }
+    throw new Error(error.message)
+  }
+}
+
+/**
+ * Resolve a shortcode back to its signed-decide fields, or null if it does not
+ * exist or has expired. Expiry is enforced here (in addition to the downstream
+ * signature/exp re-check) so an expired code never even renders the form.
+ */
+export async function resolveDecideShortcode(code: string): Promise<{
+  owner_id: string
+  channel: string
+  sender: string
+  label: string | null
+  exp: number
+  sig: string
+} | null> {
+  if (!code) return null
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('sna_decide_shortcodes')
+    .select('owner_id,channel,sender,label,exp,sig')
+    .eq('code', code)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  // Expired shortcodes resolve to null (link is dead just like the long form).
+  if ((data as { exp: number }).exp <= Date.now()) return null
+  return data as {
+    owner_id: string
+    channel: string
+    sender: string
+    label: string | null
+    exp: number
+    sig: string
+  }
 }
