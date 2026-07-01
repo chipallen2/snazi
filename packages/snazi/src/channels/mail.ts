@@ -40,6 +40,21 @@ export function htmlToText(html: string): string {
   return decodeEntities(
     html
       .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+      .replace(
+        // <a ...href="url"...>text</a> -> [text](url), preserving link URLs.
+        // Handles quoted/single-quoted hrefs, other attrs before/after href,
+        // and multiline/nested anchor content.
+        /<a\b[^>]*?\bhref\s*=\s*("([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi,
+        (match, _q, dq, sq, inner) => {
+          const url = (dq ?? sq ?? '').trim()
+          // Only preserve real web links; leave mailto:/tel:/etc. to be stripped.
+          if (!/^https?:\/\//i.test(url)) {
+            return inner
+          }
+          const text = inner.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+          return text ? `[${text}](${url})` : url
+        }
+      )
       .replace(/<br\s*\/?>(?=\s*\S)/gi, '\n')
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
       .replace(/<[^>]+>/g, '')
