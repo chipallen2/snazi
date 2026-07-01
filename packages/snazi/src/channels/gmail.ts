@@ -19,6 +19,9 @@ import type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  MessageAction,
+  MessageActionParams,
+  MessageActionResult,
   MessageRow,
   SenderSummary,
 } from './types'
@@ -78,6 +81,29 @@ async function apiGet<T>(
     throw new Error(`Gmail API ${path} failed: HTTP ${res.status} ${body.slice(0, 200)}`)
   }
   return res.json() as Promise<T>
+}
+
+/** POST a Gmail API path (relative to API_BASE) with a JSON body, parse JSON. */
+async function apiPost<T>(
+  accessToken: string,
+  path: string,
+  body?: unknown
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Gmail API ${path} failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+  }
+  // Some Gmail endpoints (e.g. trash) return a body; others may be empty.
+  const text = await res.text().catch(() => '')
+  return (text ? JSON.parse(text) : {}) as T
 }
 
 function headerValue(msg: GmailMessage, name: string): string {
@@ -229,6 +255,60 @@ export const gmailAdapter: ChannelAdapter = {
       }
     })
     return rows.sort((a, b) => a.date.localeCompare(b.date))
+  },
+
+  async performMessageAction(
+    ctx: ChannelContext,
+    action: MessageAction,
+    params: MessageActionParams
+  ): Promise<MessageActionResult> {
+    const accessToken = await token(ctx)
+
+    // Resolve the target message ids: a single id, or all from a sender.
+    let ids: string[]
+    if (params.messageId) {
+      ids = [params.messageId]
+    } else if (params.sender) {
+      const sinceMinutes = params.sinceMinutes ?? 1440
+      const addr = params.sender.toLowerCase()
+      ids = await listMessageIds(
+        accessToken,
+        `after:${epochSeconds(sinceMinutes)} from:${addr}`,
+        MAX_READ
+      )
+    } else {
+      ids = []
+    }
+
+    if (ids.length === 0) return { affected: 0 }
+
+    const act = async (id: string): Promise<void> => {
+      switch (action) {
+        case 'archive':
+          await apiPost(accessToken, `/messages/${id}/modify`, {
+            removeLabelIds: ['INBOX'],
+          })
+          return
+        case 'delete':
+          await apiPost(accessToken, `/messages/${id}/trash`)
+          return
+        case 'markRead':
+          await apiPost(accessToken, `/messages/${id}/modify`, {
+            removeLabelIds: ['UNREAD'],
+          })
+          return
+        case 'markUnread':
+          await apiPost(accessToken, `/messages/${id}/modify`, {
+            addLabelIds: ['UNREAD'],
+          })
+          return
+        default:
+          throw new Error(`Unsupported Gmail action: ${action as string}`)
+      }
+    }
+
+    await mapLimit(ids, 10, act)
+    return { affected: ids.length }
   },
 
   sendAvailability(ctx?: ChannelContext): ChannelAvailability {
