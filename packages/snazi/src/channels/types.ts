@@ -50,6 +50,58 @@ export interface MessageActionResult {
   affected: number
 }
 
+/**
+ * Simplified, provider-neutral action kinds for a mail FILTER/RULE. Adapters
+ * translate these to their native shape (Gmail label ops / Graph rule actions).
+ */
+export type FilterActionKind =
+  | 'delete'
+  | 'archive'
+  | 'label'
+  | 'markRead'
+  | 'forward'
+
+/**
+ * A filter/rule spec. Callers may use the SIMPLIFIED fields (from/to/subject/
+ * query + action) which each adapter maps to its native model, OR pass a RAW
+ * provider-native `criteria`/`actions` object to bypass translation entirely.
+ * Raw fields, when present, take precedence over the simplified ones.
+ */
+export interface FilterSpec {
+  /** Match: sender address (Gmail `from`; Outlook senderContains). */
+  from?: string
+  /** Match: recipient address (Gmail `to`; Outlook recipientContains). */
+  to?: string
+  /** Match: subject substring. */
+  subject?: string
+  /** Match: Gmail raw search query (Gmail only). */
+  query?: string
+  /** Simplified action to take on matching mail. */
+  action?: FilterActionKind
+  /** Gmail label id to add when action is 'label'. */
+  labelId?: string
+  /** Address to forward matching mail to (action 'forward'). */
+  forwardTo?: string
+  /** Outlook destination folder id/well-known name for 'archive'/move. */
+  folderId?: string
+  /** Optional human display name (Outlook rules require one; auto-generated otherwise). */
+  name?: string
+  /** Raw provider-native criteria/conditions (bypasses simplified mapping). */
+  criteria?: Record<string, unknown>
+  /** Raw provider-native actions (bypasses simplified mapping). */
+  actions?: Record<string, unknown>
+}
+
+/** A created/listed filter or rule, provider-neutral on the outside. */
+export interface FilterRecord {
+  /** Adapter-native id (Gmail filter id / Graph messageRule id). */
+  id: string
+  /** One-line human summary for CLI display. */
+  summary: string
+  /** Provider-native object (Gmail filter / Graph messageRule). */
+  raw: unknown
+}
+
 export interface ChannelContext {
   /** Instance slug (the `--channel` value), e.g. 'gmail-work'. */
   id: string
@@ -103,4 +155,22 @@ export interface ChannelAdapter {
     action: MessageAction,
     params: MessageActionParams
   ): Promise<MessageActionResult>
+  /**
+   * Can this channel instance manage server-side filters/rules on THIS machine?
+   * Omit when the channel has no filter API (e.g. iMessage).
+   */
+  filterAvailability?(ctx?: ChannelContext): ChannelAvailability
+  /** Create a filter/rule from a (simplified or raw) spec. Throws on failure. */
+  createFilter?(ctx: ChannelContext, spec: FilterSpec): Promise<FilterRecord>
+  /** List all filters/rules for this instance. Throws on failure. */
+  listFilters?(ctx: ChannelContext): Promise<FilterRecord[]>
+  /** Get one filter/rule by adapter-native id. Throws on failure. */
+  getFilter?(ctx: ChannelContext, id: string): Promise<FilterRecord>
+  /**
+   * Update a filter/rule in place. Present only where the provider supports it
+   * (Outlook). Gmail has no update API — omit it there (server returns 405).
+   */
+  updateFilter?(ctx: ChannelContext, id: string, spec: FilterSpec): Promise<FilterRecord>
+  /** Delete a filter/rule by adapter-native id. Throws on failure. */
+  deleteFilter?(ctx: ChannelContext, id: string): Promise<void>
 }

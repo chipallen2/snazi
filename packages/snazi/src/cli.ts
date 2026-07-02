@@ -51,6 +51,12 @@ import {
   remoteLabel,
   remoteSend,
   remoteAction,
+  remoteFilterCreate,
+  remoteFilterList,
+  remoteFilterGet,
+  remoteFilterUpdate,
+  remoteFilterDelete,
+  type RemoteFilterSpec,
 } from './client'
 import { installDaemon, LABEL } from './daemon'
 import {
@@ -676,6 +682,88 @@ async function cmdRemoteAction(args: string[]): Promise<number> {
   }
 }
 
+/** Collect the filter/rule spec flags shared by create + update. */
+function filterSpecFromArgs(args: string[]): RemoteFilterSpec {
+  const spec: RemoteFilterSpec = {}
+  const from = flag(args, '--from')
+  const to = flag(args, '--to')
+  const subject = flag(args, '--subject')
+  const query = flag(args, '--query')
+  const action = flag(args, '--action')
+  const labelId = flag(args, '--label-id')
+  const forwardTo = flag(args, '--forward-to')
+  const folderId = flag(args, '--folder-id')
+  const name = flag(args, '--name')
+  if (from) spec.from = from
+  if (to) spec.to = to
+  if (subject) spec.subject = subject
+  if (query) spec.query = query
+  if (action) spec.action = action
+  if (labelId) spec.labelId = labelId
+  if (forwardTo) spec.forwardTo = forwardTo
+  if (folderId) spec.folderId = folderId
+  if (name) spec.name = name
+  return spec
+}
+
+async function cmdRemoteFilter(args: string[]): Promise<number> {
+  const sub = args[0]
+  const rest = args.slice(1)
+  const channel = flag(rest, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadRemoteConfig()
+  const usageErr = () => {
+    out({
+      error:
+        'Usage: snazi remote-filter <create|list|get|update|delete> --channel <id> [flags]\n' +
+        '  create: [--from <a>] [--to <a>] [--subject <s>] [--query <q>] --action <delete|archive|label|markRead|forward> [--label-id <id>] [--forward-to <addr>] [--folder-id <id>] [--name <n>]\n' +
+        '  list  : (no extra flags)\n' +
+        '  get   : --id <FILTER_ID>\n' +
+        '  update: --id <RULE_ID> [spec flags]   (Outlook only)\n' +
+        '  delete: --id <FILTER_ID>',
+    })
+    return 2
+  }
+  try {
+    if (sub === 'create') {
+      const spec = filterSpecFromArgs(rest)
+      const { status, json } = await remoteFilterCreate(cfg, channel, spec)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    if (sub === 'list') {
+      const { status, json } = await remoteFilterList(cfg, channel)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    if (sub === 'get') {
+      const id = flag(rest, '--id')
+      if (!id) return usageErr()
+      const { status, json } = await remoteFilterGet(cfg, channel, id)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    if (sub === 'update') {
+      const id = flag(rest, '--id')
+      if (!id) return usageErr()
+      const spec = filterSpecFromArgs(rest)
+      const { status, json } = await remoteFilterUpdate(cfg, channel, id, spec)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    if (sub === 'delete') {
+      const id = flag(rest, '--id')
+      if (!id) return usageErr()
+      const { status, json } = await remoteFilterDelete(cfg, channel, id)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    return usageErr()
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdRemoteStatus(): Promise<number> {
   const cfg = loadRemoteConfig()
   try {
@@ -768,6 +856,11 @@ Agent machine (set up with 'snazi init-agent'; calls your messages machine's gat
   snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
   snazi remote-action <archive|delete|markRead|markUnread> (--sender <addr> | --message-id <id>) [--channel <id>] [--since <min>]
                                                         Perform a message action (remote; never gated)
+  snazi remote-filter <create|list|get|update|delete> --channel <id> [flags]
+                                                        Manage Gmail filters / Outlook rules (remote; never gated)
+                                                        create: --action <delete|archive|label|markRead|forward> plus a match
+                                                        (--from/--to/--subject/--query). get/update/delete take --id. update
+                                                        is Outlook-only (Gmail has no update: delete + recreate).
 
 The server manages an approve/deny list only. It stores no messages.
 Reading is gated; sending is not. serve binds the tailnet IP (100.x) or
@@ -835,6 +928,9 @@ async function main(): Promise<void> {
       break
     case 'remote-action':
       code = await cmdRemoteAction(rest)
+      break
+    case 'remote-filter':
+      code = await cmdRemoteFilter(rest)
       break
     case 'remote-check':
       code = await cmdRemoteCheck(rest)

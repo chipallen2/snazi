@@ -17,6 +17,8 @@ import type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  FilterRecord,
+  FilterSpec,
   MessageAction,
   MessageActionParams,
   MessageActionResult,
@@ -113,6 +115,27 @@ async function graphPatch(accessToken: string, url: string, body: unknown): Prom
   }
 }
 
+/** PATCH that parses and returns the updated JSON resource. */
+async function graphPatchJson<T>(
+  accessToken: string,
+  url: string,
+  body: unknown
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Graph PATCH failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+  }
+  return res.json().catch(() => ({})) as Promise<T>
+}
+
 async function graphDelete(accessToken: string, url: string): Promise<void> {
   const res = await fetch(url, {
     method: 'DELETE',
@@ -149,6 +172,103 @@ async function actOnMessage(
     default:
       throw new Error(`Unsupported action: ${String(action)}`)
   }
+}
+
+const RULES_PATH = '/me/mailFolders/inbox/messageRules'
+
+interface GraphRuleActions {
+  moveToFolder?: string
+  delete?: boolean
+  markAsRead?: boolean
+  assignCategories?: string[]
+  forwardTo?: GraphRecipient[]
+  redirectTo?: GraphRecipient[]
+}
+interface GraphRuleConditions {
+  senderContains?: string[]
+  subjectContains?: string[]
+  bodyContains?: string[]
+  recipientContains?: string[]
+  fromAddresses?: GraphRecipient[]
+}
+interface GraphMessageRule {
+  id?: string
+  displayName?: string
+  sequence?: number
+  isEnabled?: boolean
+  conditions?: GraphRuleConditions
+  actions?: GraphRuleActions
+}
+
+/** Build Graph rule conditions from the simplified spec (undefined if none). */
+function toGraphConditions(spec: FilterSpec): GraphRuleConditions | undefined {
+  if (spec.criteria) return spec.criteria as GraphRuleConditions
+  const c: GraphRuleConditions = {}
+  if (spec.from) c.senderContains = [spec.from]
+  if (spec.to) c.recipientContains = [spec.to]
+  if (spec.subject) c.subjectContains = [spec.subject]
+  return Object.keys(c).length ? c : undefined
+}
+
+/** Build Graph rule actions from the simplified spec (undefined if no action). */
+function toGraphActions(spec: FilterSpec): GraphRuleActions | undefined {
+  if (spec.actions) return spec.actions as GraphRuleActions
+  if (!spec.action) return undefined
+  switch (spec.action) {
+    case 'delete':
+      return { delete: true }
+    case 'archive':
+      return { moveToFolder: spec.folderId || 'archive' }
+    case 'markRead':
+      return { markAsRead: true }
+    case 'label':
+      if (!spec.labelId) throw new Error("Outlook 'label' action requires --label-id (category name).")
+      return { assignCategories: [spec.labelId] }
+    case 'forward':
+      if (!spec.forwardTo) throw new Error("Outlook 'forward' action requires --forward-to.")
+      return { forwardTo: [{ emailAddress: { address: spec.forwardTo } }] }
+    default:
+      throw new Error(
+        `Outlook rule needs an action: delete | archive | markRead | label | forward.`
+      )
+  }
+}
+
+/** Auto-generate a display name for a rule when the caller didn't supply one. */
+function defaultRuleName(spec: FilterSpec): string {
+  const bits: string[] = []
+  if (spec.action) bits.push(spec.action)
+  if (spec.from) bits.push(`from ${spec.from}`)
+  else if (spec.subject) bits.push(`subject ${spec.subject}`)
+  else if (spec.to) bits.push(`to ${spec.to}`)
+  return `snazi: ${bits.join(' ') || 'rule'}`.slice(0, 64)
+}
+
+function ruleSummary(r: GraphMessageRule): string {
+  const c = r.conditions ?? {}
+  const match: string[] = []
+  if (c.senderContains?.length) match.push(`from~${c.senderContains.join('|')}`)
+  if (c.subjectContains?.length) match.push(`subject~${c.subjectContains.join('|')}`)
+  if (c.bodyContains?.length) match.push(`body~${c.bodyContains.join('|')}`)
+  if (c.recipientContains?.length) match.push(`to~${c.recipientContains.join('|')}`)
+  if (c.fromAddresses?.length)
+    match.push(`from=${c.fromAddresses.map((a) => a.emailAddress?.address).join('|')}`)
+  const a = r.actions ?? {}
+  const acts: string[] = []
+  if (a.delete) acts.push('delete')
+  if (a.moveToFolder) acts.push(`move:${a.moveToFolder}`)
+  if (a.markAsRead) acts.push('markRead')
+  if (a.assignCategories?.length) acts.push(`label:${a.assignCategories.join('+')}`)
+  if (a.forwardTo?.length)
+    acts.push(`forward:${a.forwardTo.map((x) => x.emailAddress?.address).join(',')}`)
+  if (a.redirectTo?.length)
+    acts.push(`redirect:${a.redirectTo.map((x) => x.emailAddress?.address).join(',')}`)
+  const name = r.displayName ? `"${r.displayName}" ` : ''
+  return `${name}[${match.join(', ') || '(any)'}] -> ${acts.join(', ') || '(no action)'}`
+}
+
+function toRuleRecord(r: GraphMessageRule): FilterRecord {
+  return { id: r.id ?? '', summary: ruleSummary(r), raw: r }
 }
 
 function isoSince(sinceMinutes: number): string {
@@ -299,6 +419,85 @@ export const outlookAdapter: ChannelAdapter = {
       const errBody = await res.text().catch(() => '')
       throw new Error(`Outlook send failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
     }
+  },
+
+  filterAvailability(ctx?: ChannelContext): ChannelAvailability {
+    return oauthAvailability(ctx, LABEL)
+  },
+
+  async createFilter(ctx: ChannelContext, spec: FilterSpec): Promise<FilterRecord> {
+    const accessToken = await token(ctx)
+    const conditions = toGraphConditions(spec)
+    const actions = toGraphActions(spec)
+    if (!actions || Object.keys(actions).length === 0) {
+      throw new Error('Outlook rule requires at least one action.')
+    }
+    if (!conditions || Object.keys(conditions).length === 0) {
+      throw new Error('Outlook rule requires at least one condition (from, to, or subject).')
+    }
+    // sequence must be present on create; pick one past the current max so the
+    // new rule runs last and never collides with an existing sequence.
+    const existing = await graphGet<{ value?: GraphMessageRule[] }>(
+      accessToken,
+      `${GRAPH}${RULES_PATH}`
+    )
+    const maxSeq = (existing.value ?? []).reduce(
+      (m, r) => Math.max(m, Number(r.sequence) || 0),
+      0
+    )
+    const rule: GraphMessageRule = {
+      displayName: spec.name || defaultRuleName(spec),
+      sequence: maxSeq + 1,
+      isEnabled: true,
+      conditions,
+      actions,
+    }
+    const created = await graphPost<GraphMessageRule>(accessToken, `${GRAPH}${RULES_PATH}`, rule)
+    return toRuleRecord(created)
+  },
+
+  async listFilters(ctx: ChannelContext): Promise<FilterRecord[]> {
+    const accessToken = await token(ctx)
+    const res = await graphGet<{ value?: GraphMessageRule[] }>(
+      accessToken,
+      `${GRAPH}${RULES_PATH}`
+    )
+    return (res.value ?? []).map(toRuleRecord)
+  },
+
+  async getFilter(ctx: ChannelContext, id: string): Promise<FilterRecord> {
+    const accessToken = await token(ctx)
+    const r = await graphGet<GraphMessageRule>(
+      accessToken,
+      `${GRAPH}${RULES_PATH}/${encodeURIComponent(id)}`
+    )
+    return toRuleRecord(r)
+  },
+
+  async updateFilter(ctx: ChannelContext, id: string, spec: FilterSpec): Promise<FilterRecord> {
+    const accessToken = await token(ctx)
+    // Partial PATCH: only send the properties the caller actually specified so
+    // an action-only update doesn't wipe the rule's conditions (and vice-versa).
+    const patch: GraphMessageRule = {}
+    const conditions = toGraphConditions(spec)
+    const actions = toGraphActions(spec)
+    if (conditions) patch.conditions = conditions
+    if (actions) patch.actions = actions
+    if (spec.name) patch.displayName = spec.name
+    if (Object.keys(patch).length === 0) {
+      throw new Error('Nothing to update: provide a match (from/to/subject), an action, or a name.')
+    }
+    const url = `${GRAPH}${RULES_PATH}/${encodeURIComponent(id)}`
+    const updated = await graphPatchJson<GraphMessageRule>(accessToken, url, patch)
+    // Graph may return an empty body on PATCH; fall back to a fresh GET.
+    if (updated && updated.id) return toRuleRecord(updated)
+    const fresh = await graphGet<GraphMessageRule>(accessToken, url)
+    return toRuleRecord(fresh)
+  },
+
+  async deleteFilter(ctx: ChannelContext, id: string): Promise<void> {
+    const accessToken = await token(ctx)
+    await graphDelete(accessToken, `${GRAPH}${RULES_PATH}/${encodeURIComponent(id)}`)
   },
 
   async performMessageAction(

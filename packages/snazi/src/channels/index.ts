@@ -132,6 +132,35 @@ export function resolveSendableAdapter(
 }
 
 /**
+ * Resolve a channel id to an adapter that can manage FILTERS/RULES on this
+ * host. Never throws. Filter management is never gated by the approval list.
+ * Requires the adapter to expose at least `createFilter` (Gmail/Outlook).
+ */
+export function resolveFilterAdapter(
+  channel: string,
+  cfg?: Pick<Config, 'channels'>
+): ResolvedAdapter {
+  const ctx = buildContext(channel, cfg)
+  const adapter = getAdapter(ctx.type)
+  if (!adapter) {
+    return { error: unknownChannelError(channel) }
+  }
+  if (!adapter.createFilter) {
+    return { error: `Channel '${channel}' does not support filters/rules.` }
+  }
+  const availability = adapter.filterAvailability?.(ctx) ?? adapter.availability(ctx)
+  if (!availability.available) {
+    const detail = availability.detail ? ` ${availability.detail}` : ''
+    return {
+      error: `Channel '${channel}' is not available on this machine: ${
+        availability.reason ?? 'unavailable'
+      }.${detail}`,
+    }
+  }
+  return { adapter, ctx }
+}
+
+/**
  * Resolve a channel id to an adapter that can perform message ACTIONS
  * (archive/delete/mark read-unread) on this host. Never throws. Actions are
  * never gated by the approval list — the soup nazi only blocks reading.
@@ -164,6 +193,9 @@ export type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  FilterActionKind,
+  FilterRecord,
+  FilterSpec,
   MessageAction,
   MessageActionParams,
   MessageActionResult,

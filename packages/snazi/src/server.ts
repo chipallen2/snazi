@@ -33,6 +33,8 @@ import {
   resolveReadableAdapter,
   resolveSendableAdapter,
   resolveActionableAdapter,
+  resolveFilterAdapter,
+  type FilterSpec,
 } from './channels'
 import { normalizeAddress, validateRecipientAddress } from './address'
 import { MAX_MESSAGE_LEN } from './imessage-send'
@@ -477,6 +479,189 @@ function parseMessageId(v: unknown): string | undefined {
   return raw
 }
 
+const VALID_FILTER_ACTIONS = new Set(['delete', 'archive', 'label', 'markRead', 'forward'])
+const MAX_FILTER_FIELD_LEN = 512
+
+/** Parse a required adapter-native filter/rule id (Gmail filter / Graph rule). */
+function parseFilterId(v: string | null | undefined): string {
+  const raw = (v ?? '').trim()
+  if (!raw) throw new Error('Missing id.')
+  if (raw.length > MAX_FILTER_FIELD_LEN) throw new Error('id too long.')
+  if (TEXT_CTRL_RE.test(raw)) throw new Error('Invalid id.')
+  return raw
+}
+
+/** Parse an optional short filter string field (from/subject/label/etc). */
+function parseFilterField(v: unknown, name: string): string | undefined {
+  if (v == null) return undefined
+  const raw = String(v).trim()
+  if (!raw) return undefined
+  if (raw.length > MAX_FILTER_FIELD_LEN) throw new Error(`${name} too long.`)
+  if (TEXT_CTRL_RE.test(raw)) throw new Error(`Invalid ${name}.`)
+  return raw
+}
+
+function parseFilterAction(v: unknown): FilterSpec['action'] | undefined {
+  if (v == null || v === '') return undefined
+  const a = String(v).trim()
+  if (!VALID_FILTER_ACTIONS.has(a)) {
+    throw new Error('Invalid action. Use delete | archive | label | markRead | forward.')
+  }
+  return a as FilterSpec['action']
+}
+
+/** Only accept a plain JSON object for raw criteria/actions passthrough. */
+function parseRawObject(v: unknown, name: string): Record<string, unknown> | undefined {
+  if (v == null) return undefined
+  if (typeof v !== 'object' || Array.isArray(v)) {
+    throw new Error(`Invalid ${name}: expected a JSON object.`)
+  }
+  return v as Record<string, unknown>
+}
+
+/** Build a validated FilterSpec from a parsed request body. */
+function parseFilterSpec(b: Record<string, unknown>): FilterSpec {
+  const spec: FilterSpec = {}
+  const from = parseFilterField(b.from, 'from')
+  const to = parseFilterField(b.to, 'to')
+  const subject = parseFilterField(b.subject, 'subject')
+  const query = parseFilterField(b.query, 'query')
+  const labelId = parseFilterField(b.labelId, 'labelId')
+  const forwardTo = parseFilterField(b.forwardTo, 'forwardTo')
+  const folderId = parseFilterField(b.folderId, 'folderId')
+  const name = parseFilterField(b.name, 'name')
+  const action = parseFilterAction(b.action)
+  const criteria = parseRawObject(b.criteria, 'criteria')
+  const actions = parseRawObject(b.actions, 'actions')
+  if (from) spec.from = from
+  if (to) spec.to = to
+  if (subject) spec.subject = subject
+  if (query) spec.query = query
+  if (labelId) spec.labelId = labelId
+  if (forwardTo) spec.forwardTo = forwardTo
+  if (folderId) spec.folderId = folderId
+  if (name) spec.name = name
+  if (action) spec.action = action
+  if (criteria) spec.criteria = criteria
+  if (actions) spec.actions = actions
+  return spec
+}
+
+/**
+ * POST /filter/create  body: { channel, from?, to?, subject?, query?, action?,
+ *   labelId?, forwardTo?, folderId?, name?, criteria?, actions? }
+ * Creates a Gmail filter / Outlook rule. NEVER gated by the approval list.
+ */
+async function handleFilterCreate(
+  cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as Record<string, unknown>
+  const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
+  const spec = parseFilterSpec(b)
+  const { adapter, ctx, error } = resolveFilterAdapter(channel, cfg)
+  if (!adapter?.createFilter || !ctx) return { status: 501, body: { error } }
+  try {
+    const filter = await adapter.createFilter(ctx, spec)
+    return { status: 200, body: { ok: true, channel, filter } }
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+}
+
+/** GET /filter/list?channel=... — list all filters/rules. */
+async function handleFilterList(
+  cfg: Config,
+  url: URL
+): Promise<{ status: number; body: unknown }> {
+  const channel = parseChannel(url.searchParams.get('channel'))
+  const { adapter, ctx, error } = resolveFilterAdapter(channel, cfg)
+  if (!adapter?.listFilters || !ctx) return { status: 501, body: { error } }
+  try {
+    const filters = await adapter.listFilters(ctx)
+    return { status: 200, body: { channel, count: filters.length, filters } }
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+}
+
+/** GET /filter/get?channel=...&id=... — one filter/rule by id. */
+async function handleFilterGet(
+  cfg: Config,
+  url: URL
+): Promise<{ status: number; body: unknown }> {
+  const channel = parseChannel(url.searchParams.get('channel'))
+  const id = parseFilterId(url.searchParams.get('id'))
+  const { adapter, ctx, error } = resolveFilterAdapter(channel, cfg)
+  if (!adapter?.getFilter || !ctx) return { status: 501, body: { error } }
+  try {
+    const filter = await adapter.getFilter(ctx, id)
+    return { status: 200, body: { channel, filter } }
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e)
+    const code = /HTTP 404/.test(msg) ? 404 : 502
+    return { status: code, body: { error: msg } }
+  }
+}
+
+/** PATCH /filter/update?channel=...&id=... — Outlook only; Gmail returns 405. */
+async function handleFilterUpdate(
+  cfg: Config,
+  url: URL,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  const channel = parseChannel(url.searchParams.get('channel'))
+  const id = parseFilterId(url.searchParams.get('id'))
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const spec = parseFilterSpec((parsed ?? {}) as Record<string, unknown>)
+  const { adapter, ctx, error } = resolveFilterAdapter(channel, cfg)
+  if (!adapter || !ctx) return { status: 501, body: { error } }
+  if (!adapter.updateFilter) {
+    return {
+      status: 405,
+      body: {
+        error: `Channel '${channel}' has no update API. Delete and recreate the filter instead.`,
+      },
+    }
+  }
+  try {
+    const filter = await adapter.updateFilter(ctx, id, spec)
+    return { status: 200, body: { ok: true, channel, filter } }
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+}
+
+/** DELETE /filter/delete?channel=...&id=... — remove a filter/rule. */
+async function handleFilterDelete(
+  cfg: Config,
+  url: URL
+): Promise<{ status: number; body: unknown }> {
+  const channel = parseChannel(url.searchParams.get('channel'))
+  const id = parseFilterId(url.searchParams.get('id'))
+  const { adapter, ctx, error } = resolveFilterAdapter(channel, cfg)
+  if (!adapter?.deleteFilter || !ctx) return { status: 501, body: { error } }
+  try {
+    await adapter.deleteFilter(ctx, id)
+    return { status: 200, body: { ok: true, channel, id, deleted: true } }
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e)
+    const code = /HTTP 404/.test(msg) ? 404 : 502
+    return { status: code, body: { error: msg } }
+  }
+}
+
 /**
  * POST /action  body: { sender?, messageId?, channel, action, sinceMinutes? }
  * Performs an action (archive/delete/markRead/markUnread) on one or more
@@ -553,8 +738,9 @@ export function createServer(cfg: Config): http.Server {
           return sendJson(res, 200, { ok: true, version: VERSION })
         }
 
-        // Only GET (reads) and POST /label, /send, /action are allowed on this surface.
-        if (method !== 'GET' && method !== 'POST') {
+        // Allowed verbs on this surface: GET (reads), POST (label/send/action/
+        // filter create), PATCH (filter update), DELETE (filter delete).
+        if (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'DELETE') {
           return sendJson(res, 405, { error: 'Method not allowed.' })
         }
 
@@ -578,6 +764,27 @@ export function createServer(cfg: Config): http.Server {
             const r = await handleAction(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
+          if (pathname === '/filter/create') {
+            const r = await handleFilterCreate(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
+          return sendJson(res, 404, { error: 'Not found.' })
+        }
+
+        if (method === 'PATCH') {
+          if (pathname === '/filter/update') {
+            const rawBody = await readBody(req, MAX_BODY_BYTES)
+            const r = await handleFilterUpdate(cfg, url, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
+          return sendJson(res, 404, { error: 'Not found.' })
+        }
+
+        if (method === 'DELETE') {
+          if (pathname === '/filter/delete') {
+            const r = await handleFilterDelete(cfg, url)
+            return sendJson(res, r.status, r.body)
+          }
           return sendJson(res, 404, { error: 'Not found.' })
         }
 
@@ -596,6 +803,14 @@ export function createServer(cfg: Config): http.Server {
           }
           case '/resolve': {
             const r = await handleResolve(cfg, url)
+            return sendJson(res, r.status, r.body)
+          }
+          case '/filter/list': {
+            const r = await handleFilterList(cfg, url)
+            return sendJson(res, r.status, r.body)
+          }
+          case '/filter/get': {
+            const r = await handleFilterGet(cfg, url)
             return sendJson(res, r.status, r.body)
           }
           default:
@@ -651,6 +866,11 @@ export async function startServer(
         'POST /label',
         'POST /send',
         'POST /action',
+        'POST /filter/create',
+        'GET /filter/list',
+        'GET /filter/get',
+        'PATCH /filter/update',
+        'DELETE /filter/delete',
       ],
       reachable_on:
         bind === '127.0.0.1'

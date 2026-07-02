@@ -173,6 +173,120 @@ export async function remoteAction(
   return postJson(url, token, '/action', body)
 }
 
+/** Send a JSON body with an arbitrary method (PATCH), parse the JSON reply. */
+async function sendJson(
+  base: string,
+  token: string,
+  method: string,
+  path: string,
+  body: unknown
+): Promise<{ status: number; json: unknown }> {
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    ...NO_STORE,
+  })
+  let json: unknown
+  try {
+    json = await res.json()
+  } catch {
+    json = { error: `Non-JSON response: HTTP ${res.status}` }
+  }
+  return { status: res.status, json }
+}
+
+/** DELETE a path (no body), parse the JSON reply. */
+async function deleteJson(
+  base: string,
+  token: string,
+  path: string
+): Promise<{ status: number; json: unknown }> {
+  const res = await fetch(`${base}${path}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+    ...NO_STORE,
+  })
+  let json: unknown
+  try {
+    json = await res.json()
+  } catch {
+    json = { error: `Non-JSON response: HTTP ${res.status}` }
+  }
+  return { status: res.status, json }
+}
+
+/** A provider-neutral filter/rule spec passed to the serve host. */
+export interface RemoteFilterSpec {
+  from?: string
+  to?: string
+  subject?: string
+  query?: string
+  action?: string
+  labelId?: string
+  forwardTo?: string
+  folderId?: string
+  name?: string
+  criteria?: Record<string, unknown>
+  actions?: Record<string, unknown>
+}
+
+/** Create a Gmail filter / Outlook rule via the remote serve POST /filter/create. */
+export async function remoteFilterCreate(
+  cfg: Config,
+  channel: string,
+  spec: RemoteFilterSpec
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  return postJson(url, token, '/filter/create', { channel, ...spec })
+}
+
+/** List filters/rules via the remote serve GET /filter/list. */
+export async function remoteFilterList(
+  cfg: Config,
+  channel: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  return getJson(url, token, `/filter/list?channel=${encodeURIComponent(channel)}`)
+}
+
+/** Get one filter/rule via the remote serve GET /filter/get. */
+export async function remoteFilterGet(
+  cfg: Config,
+  channel: string,
+  id: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const q = `/filter/get?channel=${encodeURIComponent(channel)}&id=${encodeURIComponent(id)}`
+  return getJson(url, token, q)
+}
+
+/** Update a rule (Outlook only) via the remote serve PATCH /filter/update. */
+export async function remoteFilterUpdate(
+  cfg: Config,
+  channel: string,
+  id: string,
+  spec: RemoteFilterSpec
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const q = `/filter/update?channel=${encodeURIComponent(channel)}&id=${encodeURIComponent(id)}`
+  return sendJson(url, token, 'PATCH', q, spec)
+}
+
+/** Delete a filter/rule via the remote serve DELETE /filter/delete. */
+export async function remoteFilterDelete(
+  cfg: Config,
+  channel: string,
+  id: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const q = `/filter/delete?channel=${encodeURIComponent(channel)}&id=${encodeURIComponent(id)}`
+  return deleteJson(url, token, q)
+}
+
 /** Connectivity probe against a remote serve `/health`. */
 export async function remoteHealth(
   cfg: Config

@@ -19,6 +19,8 @@ import type {
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
+  FilterRecord,
+  FilterSpec,
   MessageAction,
   MessageActionParams,
   MessageActionResult,
@@ -104,6 +106,100 @@ async function apiPost<T>(
   // Some Gmail endpoints (e.g. trash) return a body; others may be empty.
   const text = await res.text().catch(() => '')
   return (text ? JSON.parse(text) : {}) as T
+}
+
+/** DELETE a Gmail API path (relative to API_BASE). Expects an empty 204 body. */
+async function apiDelete(accessToken: string, path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Gmail API ${path} failed: HTTP ${res.status} ${body.slice(0, 200)}`)
+  }
+}
+
+/** A Gmail settings.filters resource (subset of fields we read/write). */
+interface GmailFilter {
+  id?: string
+  criteria?: Record<string, unknown>
+  action?: {
+    addLabelIds?: string[]
+    removeLabelIds?: string[]
+    forward?: string
+  }
+}
+
+/**
+ * Translate a (simplified or raw) FilterSpec into a Gmail filter resource.
+ * Raw `criteria`/`actions` win when provided; otherwise the simplified
+ * from/to/subject/query + action are mapped to Gmail's label operations.
+ */
+function toGmailFilter(spec: FilterSpec): GmailFilter {
+  // Raw passthrough: caller supplied native criteria/action objects.
+  if (spec.criteria || spec.actions) {
+    return {
+      criteria: spec.criteria ?? {},
+      action: (spec.actions as GmailFilter['action']) ?? {},
+    }
+  }
+
+  const criteria: Record<string, unknown> = {}
+  if (spec.from) criteria.from = spec.from
+  if (spec.to) criteria.to = spec.to
+  if (spec.subject) criteria.subject = spec.subject
+  if (spec.query) criteria.query = spec.query
+  if (Object.keys(criteria).length === 0) {
+    throw new Error('Gmail filter needs at least one match: from, to, subject, or query.')
+  }
+
+  const action: NonNullable<GmailFilter['action']> = {}
+  switch (spec.action) {
+    case 'delete':
+      action.addLabelIds = ['TRASH']
+      break
+    case 'archive':
+      action.removeLabelIds = ['INBOX']
+      break
+    case 'markRead':
+      action.removeLabelIds = ['UNREAD']
+      break
+    case 'label':
+      if (!spec.labelId) throw new Error("Gmail 'label' action requires --label-id.")
+      action.addLabelIds = [spec.labelId]
+      break
+    case 'forward':
+      if (!spec.forwardTo) throw new Error("Gmail 'forward' action requires --forward-to.")
+      action.forward = spec.forwardTo
+      break
+    default:
+      throw new Error(
+        `Gmail filter needs an action: delete | archive | markRead | label | forward.`
+      )
+  }
+  return { criteria, action }
+}
+
+/** Build a short human summary line for a Gmail filter. */
+function gmailFilterSummary(f: GmailFilter): string {
+  const c = f.criteria ?? {}
+  const match = Object.entries(c)
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .join(', ') || '(any)'
+  const a = f.action ?? {}
+  const acts: string[] = []
+  if (a.addLabelIds?.includes('TRASH')) acts.push('delete')
+  if (a.removeLabelIds?.includes('INBOX')) acts.push('archive')
+  if (a.removeLabelIds?.includes('UNREAD')) acts.push('markRead')
+  const otherLabels = (a.addLabelIds ?? []).filter((l) => l !== 'TRASH')
+  if (otherLabels.length) acts.push(`label:${otherLabels.join('+')}`)
+  if (a.forward) acts.push(`forward:${a.forward}`)
+  return `[${match}] -> ${acts.join(', ') || '(no action)'}`
+}
+
+function toFilterRecord(f: GmailFilter): FilterRecord {
+  return { id: f.id ?? '', summary: gmailFilterSummary(f), raw: f }
 }
 
 function headerValue(msg: GmailMessage, name: string): string {
@@ -313,6 +409,40 @@ export const gmailAdapter: ChannelAdapter = {
 
     await mapLimit(ids, 10, act)
     return { affected: ids.length }
+  },
+
+  filterAvailability(ctx?: ChannelContext): ChannelAvailability {
+    return oauthAvailability(ctx, LABEL)
+  },
+
+  async createFilter(ctx: ChannelContext, spec: FilterSpec): Promise<FilterRecord> {
+    const accessToken = await token(ctx)
+    const filter = toGmailFilter(spec)
+    const created = await apiPost<GmailFilter>(accessToken, '/settings/filters', filter)
+    return toFilterRecord(created)
+  },
+
+  async listFilters(ctx: ChannelContext): Promise<FilterRecord[]> {
+    const accessToken = await token(ctx)
+    const res = await apiGet<{ filter?: GmailFilter[] }>(accessToken, '/settings/filters')
+    return (res.filter ?? []).map(toFilterRecord)
+  },
+
+  async getFilter(ctx: ChannelContext, id: string): Promise<FilterRecord> {
+    const accessToken = await token(ctx)
+    const f = await apiGet<GmailFilter>(
+      accessToken,
+      `/settings/filters/${encodeURIComponent(id)}`
+    )
+    return toFilterRecord(f)
+  },
+
+  // NOTE: no updateFilter — the Gmail API has no filter update endpoint
+  // (delete + recreate is the supported pattern). The serve layer returns 405.
+
+  async deleteFilter(ctx: ChannelContext, id: string): Promise<void> {
+    const accessToken = await token(ctx)
+    await apiDelete(accessToken, `/settings/filters/${encodeURIComponent(id)}`)
   },
 
   sendAvailability(ctx?: ChannelContext): ChannelAvailability {
