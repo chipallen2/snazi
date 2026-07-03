@@ -1,10 +1,11 @@
-# snazi — message gate CLI (iMessage, Gmail, Outlook)
+# snazi — capability & messaging gate CLI
 
 > "No messages for you."
 
-The **local gate**. An on-demand CLI that reads your messages through pluggable
-**channel adapters** so an AI agent can be told *who* messaged without being able
-to read *what* they said — unless the sender is on the server's approved list.
+snazi is a **capability gate** for AI agents. It has two functions:
+
+1. **Messaging gate** — An on-demand CLI that reads your messages (iMessage, Gmail, Outlook) through pluggable **channel adapters** so an AI agent can be told *who* messaged without being able to read *what* they said — unless the sender is on the server's approved list.
+2. **Capability gate** — Any action an AI agent wants to take on your behalf (trades, payments, account changes) can be gated behind the same one-tap HMAC-signed `/decide` approval link pattern. Built-in: **Schwab** financial adapter.
 Built-in channel **types**: iMessage (macOS), Gmail (Gmail API), and Outlook
 (Microsoft Graph). The CLI runs on macOS, Windows, and Linux (Node 18+); each
 type works wherever its adapter does (iMessage is macOS-only; Gmail/Outlook are
@@ -502,11 +503,81 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 # Unknown/denied sender on /read → 403 { "error": "Sender not approved. No messages for you.", ... }
 ```
 
+## Capability Adapters
+
+snazi is not just a messaging gate — it is a **capability gate**. Any action an AI agent wants to take on your behalf can be gated behind the same one-tap HMAC-signed `/decide` link pattern.
+
+### Architecture
+
+```
+  Your AI agent
+       │
+       │  POST /schwab/action { type, payload, description }
+       │
+  ┌────────────────────────────────────────┐
+  │  snazi serve (capabilities machine)    │  ← Schwab creds in Keychain
+  └───────────┬──────────────────┬─────────┘
+              │                  │
+              │ mint action link │ execute (after approval)
+              ▼                  ▼
+  ┌───────────────────────────┐
+  │  snazi.dev (web tier)     │  ← sna_actions table
+  │  /api/action-link         │
+  │  /decide?a=<code>  ──────►│── one-tap approve / deny
+  └───────────────────────────┘
+```
+
+### Schwab adapter
+
+The Schwab adapter reads credentials from the **macOS Keychain** on the serve host — no secrets in config files or environment variables. Set up:
+
+```bash
+# Store your Schwab OAuth tokens (run on the messages machine)
+security add-generic-password -s snazi-schwab-client-id     -a snazi -w "<client-id>"
+security add-generic-password -s snazi-schwab-client-secret -a snazi -w "<client-secret>"
+security add-generic-password -s snazi-schwab-refresh-token -a snazi -w "<refresh-token>"
+```
+
+Once set, the serve daemon exposes:
+
+| Method + path | Auth | Returns |
+| --- | --- | --- |
+| `GET /schwab/accounts` | bearer | All accounts + positions. Read-only, no approval gate. |
+| `GET /schwab/transactions?accountNumber=&from=&to=` | bearer | Transactions for one account in a date range. `from` required (ISO 8601). |
+| `POST /schwab/action` body `{ type, payload, description }` | bearer | Mints a signed action-approval link via snazi.dev. Returns `{ url, code }`. The action is NOT executed until approved. |
+
+From the agent machine:
+
+```bash
+# Read accounts (no approval needed — read-only)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/schwab/accounts"
+
+# Read transactions
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/schwab/transactions?accountNumber=XXXX1234&from=2026-01-01"
+
+# Request an action (returns an approval link — nothing executes until Chip taps it)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"type":"transfer","payload":{"from":"checking","to":"brokerage","amount":500},"description":"Move $500 to brokerage"}' \
+  "$BASE/schwab/action"
+# { "url": "https://snazi.dev/decide?a=abc12345", "code": "abc12345" }
+# Send that URL to the user — action only runs after they tap Approve.
+```
+
+### Adding your own capability adapter
+
+1. Add `packages/snazi/src/adapters/<name>.ts` — export functions, read secrets from Keychain.
+2. Add endpoints to `packages/snazi/src/server.ts` following the Schwab pattern.
+3. For write operations, always go through `POST /schwab/action` → snazi.dev action-link flow so the user gets a one-tap approve/deny.
+
+---
+
 ## Why this design
 
 - **No prompt-injection surface from strangers.** The agent never sees content
   from unknown senders, so a malicious text can't smuggle instructions to it.
 - **No message storage anywhere.** Cheap and private. The server is a list, not
   an inbox.
+- **One-tap approval for any action.** The same signed `/decide` link pattern used for sender approvals works for any capability — trades, payments, config changes. The agent proposes; you approve.
 - **Extensible.** The same server list API works for other channels (e.g.
   Gmail) — just add a channel and a new wrapper that calls `/api/senders/check`.
