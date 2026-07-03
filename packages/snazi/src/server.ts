@@ -28,6 +28,7 @@ import * as crypto from 'crypto'
 import * as os from 'os'
 import type { Config } from './config'
 import { listSenders, setLabel, buildLabelMap, type CheckStatus, type SenderRecord } from './api'
+import { getAccounts, getTransactions } from './adapters/schwab'
 import { checkSenderCached } from './cache'
 import {
   resolveReadableAdapter,
@@ -721,6 +722,177 @@ async function handleAction(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Schwab capability endpoints
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /schwab/accounts
+ * Returns all Schwab accounts with positions. No approval gate — READ only.
+ * Credentials are read from macOS Keychain on the serve host; never stored
+ * in config.json or returned by this endpoint.
+ */
+async function handleSchwabAccounts(): Promise<{ status: number; body: unknown }> {
+  try {
+    const accounts = await getAccounts()
+    return { status: 200, body: { ok: true, count: accounts.length, accounts } }
+  } catch (e) {
+    return {
+      status: 502,
+      body: { error: String(e instanceof Error ? e.message : e) },
+    }
+  }
+}
+
+/**
+ * GET /schwab/transactions?accountNumber=&from=&to=
+ * Returns transactions for one account in a date range.
+ * `from` is required (ISO 8601); `to` defaults to today.
+ */
+async function handleSchwabTransactions(
+  url: URL
+): Promise<{ status: number; body: unknown }> {
+  const accountNumber = (url.searchParams.get('accountNumber') ?? '').trim()
+  const from = (url.searchParams.get('from') ?? '').trim()
+  const to = (url.searchParams.get('to') ?? '').trim() || undefined
+  if (!accountNumber) {
+    return { status: 400, body: { error: 'accountNumber is required.' } }
+  }
+  if (!from) {
+    return { status: 400, body: { error: 'from date is required (ISO 8601).' } }
+  }
+  try {
+    const transactions = await getTransactions(accountNumber, from, to)
+    return {
+      status: 200,
+      body: { ok: true, accountNumber, from, to: to ?? 'today', count: transactions.length, transactions },
+    }
+  } catch (e) {
+    return {
+      status: 502,
+      body: { error: String(e instanceof Error ? e.message : e) },
+    }
+  }
+}
+
+// Max bytes for a /schwab/action body (type + payload + description).
+const MAX_ACTION_BODY_BYTES = 16 * 1024
+const ACTION_TYPE_RE = /^[a-z0-9_]+$/i
+const MAX_ACTION_TYPE_LEN = 64
+const MAX_ACTION_DESC_LEN = 500
+// eslint-disable-next-line no-control-regex
+const ACTION_CTRL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
+
+/**
+ * POST /schwab/action  body: { type, payload, description }
+ * Mints a pending capability action + signed /decide link via the web tier
+ * (snazi.dev/api/action-link). Returns { url, code } — the caller sends the
+ * URL to the owner for one-tap approval.
+ *
+ * Uses the READ token from config (cfg.apiKey) which can mint pending actions
+ * but can NEVER approve/execute them (the web tier enforces this split).
+ * The web tier URL is cfg.apiUrl (e.g. https://snazi.dev).
+ */
+async function handleSchwabAction(
+  cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as { type?: unknown; payload?: unknown; description?: unknown }
+
+  const type = typeof b.type === 'string' ? b.type.trim() : ''
+  if (!type || type.length > MAX_ACTION_TYPE_LEN || !ACTION_TYPE_RE.test(type)) {
+    return {
+      status: 400,
+      body: { error: 'type is required ([A-Za-z0-9_], <= 64 chars).' },
+    }
+  }
+  const description = typeof b.description === 'string' ? b.description.trim() : ''
+  if (!description || description.length > MAX_ACTION_DESC_LEN || ACTION_CTRL_RE.test(description)) {
+    return {
+      status: 400,
+      body: { error: 'description is required (<= 500 chars, no control chars).' },
+    }
+  }
+  if (b.payload == null || typeof b.payload !== 'object' || Array.isArray(b.payload)) {
+    return { status: 400, body: { error: 'payload is required and must be a JSON object.' } }
+  }
+
+  // Forward to the web tier's action-link endpoint (snazi.dev) using the
+  // READ token. The web tier owns HMAC signing + DB persistence; the serve
+  // host never touches those concerns.
+  const apiUrl = (cfg.apiUrl ?? '').replace(/\/+$/, '')
+  const apiKey = cfg.apiKey ?? ''
+  if (!apiUrl || !apiKey) {
+    return { status: 503, body: { error: 'apiUrl or apiKey not configured on serve host.' } }
+  }
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 10_000)
+    const res = await fetch(`${apiUrl}/api/action-link`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({ type, payload: b.payload, description }),
+      signal: ctrl.signal,
+    } as RequestInit)
+    clearTimeout(timer)
+    const json = await res.json() as Record<string, unknown>
+    if (!res.ok) {
+      return {
+        status: res.status >= 400 && res.status < 600 ? res.status : 502,
+        body: json,
+      }
+    }
+    return { status: 200, body: json }
+  } catch (e) {
+    return {
+      status: 502,
+      body: { error: `action-link request failed: ${String(e instanceof Error ? e.message : e)}` },
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// /notify — send a message to the owner via a local channel (best-effort).
+// Called by the web tier (snazi.dev) when a capability action is approved/denied.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /notify  body: { to, channel, message }
+ * Sends a message to the owner. Bearer-authenticated. Called by the web tier's
+ * action-service.ts to relay approval/denial outcomes to the owner over iMessage
+ * (or any other configured channel). Never gated — same as POST /send.
+ *
+ * This is a lightweight wrapper: it reuses the same /send handler logic.
+ */
+async function handleNotify(
+  cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as { to?: unknown; channel?: unknown; message?: unknown }
+  // Reuse /send by mapping to its expected field names.
+  const sendBody = JSON.stringify({
+    recipient: typeof b.to === 'string' ? b.to : null,
+    channel: typeof b.channel === 'string' ? b.channel : null,
+    text: typeof b.message === 'string' ? b.message : null,
+  })
+  return handleSend(cfg, sendBody)
+}
+
 /** Build (but do not start) the HTTP server. Exposed for tests. */
 export function createServer(cfg: Config): http.Server {
   const token = cfg.serveToken ?? ''
@@ -751,7 +923,13 @@ export function createServer(cfg: Config): http.Server {
         }
 
         if (method === 'POST') {
-          const rawBody = await readBody(req, pathname === '/label' ? MAX_LABEL_BODY_BYTES : MAX_BODY_BYTES)
+          const maxBytes =
+            pathname === '/label'
+              ? MAX_LABEL_BODY_BYTES
+              : pathname === '/schwab/action'
+                ? MAX_ACTION_BODY_BYTES
+                : MAX_BODY_BYTES
+          const rawBody = await readBody(req, maxBytes)
           if (pathname === '/label') {
             const r = await handleLabel(cfg, rawBody)
             return sendJson(res, r.status, r.body)
@@ -760,12 +938,20 @@ export function createServer(cfg: Config): http.Server {
             const r = await handleSend(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
+          if (pathname === '/notify') {
+            const r = await handleNotify(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
           if (pathname === '/action') {
             const r = await handleAction(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
           if (pathname === '/filter/create') {
             const r = await handleFilterCreate(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
+          if (pathname === '/schwab/action') {
+            const r = await handleSchwabAction(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
           return sendJson(res, 404, { error: 'Not found.' })
@@ -789,6 +975,14 @@ export function createServer(cfg: Config): http.Server {
         }
 
         switch (pathname) {
+          case '/schwab/accounts': {
+            const r = await handleSchwabAccounts()
+            return sendJson(res, r.status, r.body)
+          }
+          case '/schwab/transactions': {
+            const r = await handleSchwabTransactions(url)
+            return sendJson(res, r.status, r.body)
+          }
           case '/list-new': {
             const r = await handleListNew(cfg, url)
             return sendJson(res, r.status, r.body)
@@ -865,12 +1059,16 @@ export async function startServer(
         '/resolve',
         'POST /label',
         'POST /send',
+        'POST /notify',
         'POST /action',
         'POST /filter/create',
         'GET /filter/list',
         'GET /filter/get',
         'PATCH /filter/update',
         'DELETE /filter/delete',
+        'GET /schwab/accounts',
+        'GET /schwab/transactions',
+        'POST /schwab/action',
       ],
       reachable_on:
         bind === '127.0.0.1'

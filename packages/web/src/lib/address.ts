@@ -108,3 +108,21 @@ export function extractEmailDomain(address: string): string | null {
 export function domainWildcard(domain: string): string {
   return `*@${domain.toLowerCase().trim()}`
 }
+
+/**
+ * Extract the root (eTLD+1 approximation) from a domain with a subdomain.
+ * Returns the last two dot-delimited parts, or null if the domain is already
+ * a root domain (2 or fewer parts — no subdomain to strip).
+ *
+ * Examples:
+ *   "portal.hzmtx.com"  → "hzmtx.com"
+ *   "hzmtx.com"         → null  (already root)
+ *   "a.b.example.com"   → "example.com"
+ *
+ * Note: simple heuristic (last 2 parts), does not handle multi-part TLDs like .co.uk.
+ */
+export function extractRootDomain(domain: string): string | null {
+  const parts = domain.toLowerCase().trim().split('.')
+  if (parts.length <= 2) return null
+  return parts.slice(-2).join('.')
+}

@@ -215,6 +215,82 @@ packages/
 
 ---
 
+## Capability Adapters
+
+snazi is not just a messaging gate — it is a **capability gate**. Any action an AI agent wants to take on your behalf can be gated behind the same one-tap HMAC-signed `/decide` link pattern.
+
+### Architecture
+
+```
+  Your AI agent
+       │
+       │  POST /schwab/action { type, payload, description }
+       ┃
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  ┃  snazi serve (capabilities Mac) ┃  ← Schwab creds in Keychain
+  ┗━━━━━━━━━┯━━━━━━━━━━━━━━━━┯━━━━━━━━━┛
+              │                    │
+              │ mint action link   │ execute (trades: stub)
+              ▼                    ▼
+  ┌─────────────────────────┐
+  │  snazi.dev (web tier)         │  ← sna_actions table
+  └──────────────┬───────────┘
+                       │
+              "Approve?" tap link
+                       │
+                       ▼
+               👤  Owner (Chip's phone)
+```
+
+### How it works
+
+1. **Read operations** (accounts, balances): the agent calls `GET /schwab/accounts` or `GET /schwab/transactions` directly — no approval needed.
+2. **Write operations** (trades): the agent calls `POST /schwab/action` with a `type`, `payload`, and `description`. The serve host mints a pending action row on snazi.dev and returns a signed `/decide?a=<code>` URL. The agent sends that URL to the owner. The owner taps **Approve** or **Deny**. On approval, the web tier executes the action and notifies via `/notify`.
+3. **HMAC security**: the `/decide` link is HMAC-signed over `action.<owner>.<code>.<exp>`. The signature is re-verified on every approval attempt — a forged or expired link never executes.
+4. **Stub mode**: Schwab trading is currently **read-only**. Approved trade actions are recorded but not placed. Chip turns on live trading by replacing the stub in `packages/web/src/lib/action-service.ts`.
+
+### Schwab setup (capabilities machine)
+
+Run these once on the machine that runs `snazi serve`:
+
+```bash
+# 1. Create a Schwab developer app at developer.schwab.com
+#    and note your client_id + client_secret.
+
+# 2. Complete the OAuth flow to get access_token + refresh_token.
+#    (Use the Schwab OAuth playground or any OAuth tool.)
+
+# 3. Store all credentials in macOS Keychain:
+security add-generic-password -s gofer-schwab-client_id     -a goferchip -w "<your_client_id>"     -U
+security add-generic-password -s gofer-schwab-client_secret -a goferchip -w "<your_client_secret>" -U
+security add-generic-password -s gofer-schwab-access_token  -a goferchip -w "<your_access_token>"  -U
+security add-generic-password -s gofer-schwab-refresh_token -a goferchip -w "<your_refresh_token>" -U
+security add-generic-password -s gofer-schwab-expires_at    -a goferchip -w "0"                    -U
+# expires_at=0 forces an immediate refresh on first use
+```
+
+The adapter (`packages/snazi/src/adapters/schwab.ts`) reads these at runtime and automatically refreshes the access token when it expires.
+
+### Schwab API endpoints (serve host)
+
+| Endpoint | Method | Notes |
+| --- | --- | --- |
+| `/schwab/accounts` | GET | All accounts + positions. No approval needed. |
+| `/schwab/transactions` | GET | `?accountNumber=&from=2024-01-01&to=2024-12-31`. No approval needed. |
+| `/schwab/action` | POST | Mints a pending trade action. Returns `{url, code}`. |
+| `/notify` | POST | Send a message to the owner (relays to `/send`). Used by web tier. |
+
+All endpoints require `Authorization: Bearer <serveToken>`.
+
+### Adding new capability adapters
+
+1. Add `packages/snazi/src/adapters/<name>.ts` with read + action functions.
+2. Wire up HTTP endpoints in `packages/snazi/src/server.ts`.
+3. Add action `type` handling in `packages/web/src/lib/action-service.ts`.
+4. Re-deploy web (`git push` → Vercel auto-deploys) and upgrade serve host (`npm i -g @chipallen2/snazi@latest && snazi restart`).
+
+---
+
 ## Self-host the server (optional)
 
 Prefer to run your own allow-list server instead of [snazi.dev](https://snazi.dev)? The service is `packages/web` (Next.js + Supabase). Skip this entirely if you use the hosted [snazi.dev](https://snazi.dev).

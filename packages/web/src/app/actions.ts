@@ -3,13 +3,14 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { normalizeAddress, extractEmailDomain, domainWildcard } from '@/lib/address'
+import { normalizeAddress, extractEmailDomain, extractRootDomain, domainWildcard } from '@/lib/address'
 import {
   SESSION_COOKIE,
   verifySessionToken,
   resolveDecideOwner,
 } from '@/lib/session'
 import { upsertSender, deleteSender, updateLabel } from '@/lib/data'
+import { runActionDecision } from '@/lib/action-service'
 import type { SenderStatus } from '@/lib/types'
 
 /**
@@ -153,9 +154,12 @@ export async function decideDomainStatus(formData: FormData) {
   const sig = String(formData.get('sig') || '')
 
   if (!domain || !status) return
-  // The wildcard's domain must match the link's original sender domain, so a
-  // signed link can only ever decide for ITS OWN domain.
-  if (extractEmailDomain(original_sender) !== domain) return
+  // The wildcard's domain must match the link's original sender domain OR its
+  // root domain (so a subdomain sender can decide for the root domain too), so
+  // a signed link can only ever decide for ITS OWN domain or root domain.
+  const senderDomain = extractEmailDomain(original_sender)
+  const senderRootDomain = senderDomain ? extractRootDomain(senderDomain) : null
+  if (senderDomain !== domain && senderRootDomain !== domain) return
 
   const sessionUserId = await verifySessionToken(
     cookies().get(SESSION_COOKIE)?.value
@@ -188,6 +192,41 @@ export async function decideDomainStatus(formData: FormData) {
     done: status === 'approved' ? 'allow' : 'block',
   })
   params.set('name', `everyone @${domain}`)
+  redirect(`/decide?${params.toString()}`)
+}
+
+/**
+ * Decision on a generalized capability ACTION from the /decide page.
+ *
+ * The action's authority lives in its server-stored, HMAC-signed shortcode: the
+ * form only needs to carry the `code` and the chosen `decision`. runActionDecision
+ * re-verifies the row's signature (or a matching session), enforces expiry +
+ * pending status, then executes + notifies on approve. This mirrors decideStatus
+ * but for actions instead of senders — the existing sender flow is untouched.
+ */
+export async function decideAction(formData: FormData) {
+  const code = String(formData.get('code') || '').trim()
+  const raw = String(formData.get('decision') || '').trim()
+  const decision = raw === 'approved' ? 'approved' : raw === 'denied' ? 'denied' : null
+  if (!code || !decision) return
+
+  const sessionUserId = await verifySessionToken(cookies().get(SESSION_COOKIE)?.value)
+  const outcome = await runActionDecision({ code, decision, sessionUserId })
+
+  revalidatePath('/decide')
+
+  const params = new URLSearchParams()
+  if (!outcome.ok) {
+    // Surface a friendly dead-end for expired/already-decided/not-found/unauth.
+    params.set('adone', outcome.code)
+  } else if (outcome.status === 'denied') {
+    params.set('adone', 'denied')
+  } else {
+    // Executed: distinguish a real success from the read-only trade stub so the
+    // owner isn't misled into thinking an order was placed.
+    params.set('adone', outcome.execOk ? 'approved' : 'approved_pending')
+  }
+  params.set('summary', outcome.summary.slice(0, 300))
   redirect(`/decide?${params.toString()}`)
 }
 

@@ -159,6 +159,60 @@ export async function verifyDecide(
   return timingSafeEqual(sig, expected)
 }
 
+// --- Signed ACTION links (generalized capability approvals) -----------------
+
+/**
+ * Canonical string an ACTION signature covers. Mirrors the /decide link, but
+ * for a generalized capability action instead of a sender decision. Includes
+ * the OWNER (so a signed link can only ever act on the account that minted it),
+ * the immutable server-stored SHORTCODE (which maps to the exact sna_actions
+ * row + its frozen payload), and the EXPIRY. The payload itself is NOT signed:
+ * it is stored server-side, immutable, and looked up by the shortcode, so
+ * signing owner+code+exp is sufficient to prove the link is authentic and
+ * unexpired without risking sub-millisecond serialization mismatches.
+ */
+function actionPayload(owner: string, code: string, exp: number): string {
+  return `action.${owner}.${code}.${exp}`
+}
+
+/**
+ * Sign an action /decide link. Returns the expiry (unix ms, rounded to whole
+ * seconds so it round-trips cleanly through a Postgres timestamptz column) and
+ * the HMAC signature to persist alongside the action row.
+ */
+export async function signAction(
+  owner: string,
+  code: string,
+  ttlMs = DECIDE_TTL_MS
+): Promise<{ exp: number; sig: string }> {
+  const secret = getSecret()
+  if (!secret) {
+    throw new Error('SOUP_NAZI_AUTH_SECRET not configured.')
+  }
+  if (!owner) throw new Error('owner is required to sign an action link.')
+  if (!code) throw new Error('code is required to sign an action link.')
+  // Round to whole seconds: `exp` is stored as timestamptz, and a whole-second
+  // value serializes to `...T..:..:..000Z` which parses back to the exact same
+  // millisecond, keeping the HMAC verifiable after a DB round-trip.
+  const exp = Math.floor((Date.now() + ttlMs) / 1000) * 1000
+  const sig = await hmacHex(secret, actionPayload(owner, code, exp))
+  return { exp, sig }
+}
+
+/** Verify an action link's signature + expiry for a given owner + shortcode. */
+export async function verifyAction(
+  owner: string,
+  code: string,
+  exp: number,
+  sig: string | undefined | null
+): Promise<boolean> {
+  const secret = getSecret()
+  if (!secret || !sig || !owner || !code) return false
+  if (!Number.isFinite(exp) || exp <= Date.now()) return false
+  const expected = await hmacHex(secret, actionPayload(owner, code, exp))
+  return timingSafeEqual(sig, expected)
+}
+
 /**
  * Resolve WHICH account a /decide action operates on. Shared by the /decide page
  * (to render the form + look up status) and the decide server action (to

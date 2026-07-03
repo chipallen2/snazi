@@ -47,6 +47,38 @@ export interface Sender {
   decided_by: string | null
 }
 
+/** Lifecycle status of a generalized capability action (sna_actions). */
+export type ActionStatus =
+  | 'pending'
+  | 'approved'
+  | 'denied'
+  | 'expired'
+  | 'executed'
+
+/**
+ * A generalized capability ACTION awaiting (or past) the owner's one-tap
+ * approval. This is the sender approve/deny model extended to arbitrary actions
+ * (e.g. a Schwab trade). Rows live in sna_actions, are owner-scoped, and carry
+ * an HMAC-signed shortcode identical in spirit to sna_decide_shortcodes.
+ *
+ * `payload` is opaque machine detail (what to execute); `description` is the
+ * human-readable summary shown on the /decide page.
+ */
+export interface Action {
+  id: string
+  owner_id: string
+  type: string
+  payload: Record<string, unknown>
+  description: string
+  status: ActionStatus
+  shortcode: string | null
+  sig: string
+  exp: string
+  executed_at: string | null
+  result: Record<string, unknown> | null
+  created_at: string
+}
+
 /**
  * A service account. NOTE: password_hash is deliberately NOT part of this type
  * — it must never leave the server or be selected into UI-facing code paths.

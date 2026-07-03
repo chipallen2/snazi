@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { normalizeAddress, validateRecipientAddress } from '../src/lib/address'
+import {
+  normalizeAddress,
+  validateRecipientAddress,
+  extractRootDomain,
+} from '../src/lib/address'
 
 /**
  * These vectors MUST stay in sync with packages/snazi/test/address.test.cjs —
@@ -69,6 +73,28 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress(undefined)).toBe('')
     expect(normalizeAddress('   ')).toBe('')
     expect(normalizeAddress('not-a-number')).toBe('not-a-number')
+  })
+})
+
+describe('extractRootDomain', () => {
+  it('strips a single subdomain to the root domain', () => {
+    expect(extractRootDomain('portal.hzmtx.com')).toBe('hzmtx.com')
+  })
+
+  it('strips multiple subdomains down to the last two parts', () => {
+    expect(extractRootDomain('a.b.example.com')).toBe('example.com')
+  })
+
+  it('returns null when the domain is already a root (2 parts)', () => {
+    expect(extractRootDomain('hzmtx.com')).toBeNull()
+  })
+
+  it('returns null for a single-part hostname', () => {
+    expect(extractRootDomain('localhost')).toBeNull()
+  })
+
+  it('lowercases and trims before splitting', () => {
+    expect(extractRootDomain('  Portal.HZMTX.CoM ')).toBe('hzmtx.com')
   })
 })
 

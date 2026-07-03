@@ -8,7 +8,7 @@
  */
 import { getSupabase } from './supabase'
 import { extractEmailDomain, domainWildcard } from './address'
-import type { Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
+import type { Action, ActionStatus, Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
 
 /**
  * Thrown when a shortcode INSERT hits the primary-key unique constraint (two
@@ -476,4 +476,112 @@ export async function resolveDecideShortcode(code: string): Promise<{
     exp: number
     sig: string
   }
+}
+
+// ---------------------------------------------------------------------------
+// Generalized capability ACTIONS (sna_actions).
+//
+// This is the sender approve/deny model extended to arbitrary actions (e.g. a
+// Schwab trade). Every function here is owner-scoped just like the sender data
+// access above — an action can only ever be read/mutated by the account that
+// minted it (writes additionally re-verify the row's HMAC signature upstream).
+// Reuses ShortcodeCollisionError for the unique `shortcode` retry loop.
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist a new pending action + its signed shortcode. Throws
+ * ShortcodeCollisionError on a unique-`shortcode` conflict so the caller can
+ * retry with a freshly generated code; any other DB error is rethrown.
+ */
+export async function createAction(input: {
+  owner_id: string
+  type: string
+  payload: Record<string, unknown>
+  description: string
+  shortcode: string
+  sig: string
+  exp: number
+}): Promise<Action> {
+  assertOwner(input.owner_id)
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('sna_actions')
+    .insert({
+      owner_id: input.owner_id,
+      type: input.type,
+      payload: input.payload,
+      description: input.description,
+      status: 'pending',
+      shortcode: input.shortcode,
+      sig: input.sig,
+      exp: new Date(input.exp).toISOString(),
+    })
+    .select('*')
+    .single()
+  if (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new ShortcodeCollisionError(error.message)
+    }
+    throw new Error(error.message)
+  }
+  const row = data as Action
+  assertRowOwned(row, input.owner_id)
+  return row
+}
+
+/**
+ * Resolve a shortcode back to its full action row, or null if the code does not
+ * exist. Expiry is NOT filtered here (unlike decide shortcodes) so the /decide
+ * page can render an accurate "expired"/"already decided" dead-end; callers
+ * enforce status + expiry themselves.
+ */
+export async function getActionByShortcode(code: string): Promise<Action | null> {
+  if (!code) return null
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('sna_actions')
+    .select('*')
+    .eq('shortcode', code)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  return data as Action
+}
+
+/**
+ * Transition an action's status (owner-scoped). Optionally records the
+ * execution timestamp + result payload. Returns the updated row, or null if no
+ * matching pending-or-later row exists for this owner.
+ *
+ * `expectStatus`, when provided, makes the update a compare-and-set: the row is
+ * only advanced when it is currently in that status. This makes approval
+ * idempotent and prevents a double-execute race (two taps of Approve).
+ */
+export async function updateActionStatus(
+  ownerId: string,
+  code: string,
+  next: {
+    status: ActionStatus
+    executed_at?: string | null
+    result?: Record<string, unknown> | null
+  },
+  expectStatus?: ActionStatus
+): Promise<Action | null> {
+  assertOwner(ownerId)
+  const supabase = getSupabase()
+  const patch: Record<string, unknown> = { status: next.status }
+  if (next.executed_at !== undefined) patch.executed_at = next.executed_at
+  if (next.result !== undefined) patch.result = next.result
+  let query = supabase
+    .from('sna_actions')
+    .update(patch)
+    .eq('owner_id', ownerId)
+    .eq('shortcode', code)
+  if (expectStatus) query = query.eq('status', expectStatus)
+  const { data, error } = await query.select('*').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  const row = data as Action
+  assertRowOwned(row, ownerId)
+  return row
 }
