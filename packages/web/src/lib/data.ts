@@ -7,7 +7,7 @@
  * a forgotten owner filter can never leak one tenant's list to another.
  */
 import { getSupabase } from './supabase'
-import { extractEmailDomain, domainWildcard } from './address'
+import { senderMatchCandidates, pickMostSpecific } from './match'
 import type { Action, ActionStatus, Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
 
 /**
@@ -231,13 +231,9 @@ export async function checkSender(
   assertOwner(ownerId)
   const supabase = getSupabase()
 
-  // Candidate addresses: the exact sender + (for emails) its domain wildcard.
-  const candidates: string[] = [address]
-  const domain = extractEmailDomain(address)
-  // Guard: a wildcard's own domain wildcard would be itself; don't duplicate.
-  if (domain && domainWildcard(domain) !== address) {
-    candidates.push(domainWildcard(domain))
-  }
+  // Candidate addresses, most specific first: exact sender + (for emails) its
+  // subdomain wildcard + its root-domain wildcard (covers all subdomains).
+  const candidates = senderMatchCandidates(address)
 
   const { data, error } = await supabase
     .from('sna_senders')
@@ -251,12 +247,9 @@ export async function checkSender(
     (data as { status: string; sender_address: string; owner_id: string }[]) ?? []
   for (const row of rows) assertRowOwned(row, ownerId)
 
-  // Exact match wins over the domain wildcard.
-  const exact = rows.find((r) => r.sender_address === address)
-  if (exact) return exact.status as CheckStatus
-  const wildcard = rows.find((r) => r.sender_address !== address)
-  if (wildcard) return wildcard.status as CheckStatus
-  return 'unknown'
+  // Most specific existing decision wins: exact > subdomain > root wildcard.
+  const match = pickMostSpecific(candidates, rows)
+  return (match?.status as CheckStatus) ?? 'unknown'
 }
 
 /**
@@ -275,11 +268,7 @@ export async function getSender(
   assertOwner(ownerId)
   const supabase = getSupabase()
 
-  const candidates: string[] = [address]
-  const domain = extractEmailDomain(address)
-  if (domain && domainWildcard(domain) !== address) {
-    candidates.push(domainWildcard(domain))
-  }
+  const candidates = senderMatchCandidates(address)
 
   const { data, error } = await supabase
     .from('sna_senders')
@@ -292,10 +281,8 @@ export async function getSender(
   const rows = (data as Sender[]) ?? []
   for (const row of rows) assertRowOwned(row, ownerId)
 
-  const exact = rows.find((r) => r.sender_address === address)
-  if (exact) return exact
-  const wildcard = rows.find((r) => r.sender_address !== address)
-  return wildcard ?? null
+  // Most specific existing row wins: exact > subdomain > root wildcard.
+  return pickMostSpecific(candidates, rows)
 }
 
 /**
