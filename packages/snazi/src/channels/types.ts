@@ -102,6 +102,17 @@ export interface FilterRecord {
   raw: unknown
 }
 
+/**
+ * Optional extras for {@link ChannelAdapter.sendMessage}. All fields are
+ * optional so the plain-text send path (text-only) is unchanged.
+ */
+export interface SendOptions {
+  /** Email subject. Takes precedence over any `Subject:` line in the body. */
+  subject?: string
+  /** HTML body. When set, email channels send an HTML message. */
+  html?: string
+}
+
 export interface ChannelContext {
   /** Instance slug (the `--channel` value), e.g. 'gmail-work'. */
   id: string
@@ -144,8 +155,19 @@ export interface ChannelAdapter {
   /**
    * Send a message to a recipient. NEVER gated by the approval list — the
    * soup nazi only blocks reading. Throws on failure.
+   *
+   * `text` is always the plaintext body (and, for email, the plaintext
+   * alternative). `opts.html`, when present, upgrades email channels to send a
+   * multipart/alternative (Gmail) or HTML-body (Outlook) message; non-email
+   * channels ignore it and send `text`. `opts.subject`, when present, is the
+   * email subject (and takes precedence over any `Subject:` line in `text`).
    */
-  sendMessage?(ctx: ChannelContext, recipient: string, text: string): Promise<void>
+  sendMessage?(
+    ctx: ChannelContext,
+    recipient: string,
+    text: string,
+    opts?: SendOptions
+  ): Promise<void>
   /**
    * Perform an action on one or more messages. NEVER gated — actions don't
    * require sender approval. Throws on failure.

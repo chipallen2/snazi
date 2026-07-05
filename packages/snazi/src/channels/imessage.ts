@@ -14,6 +14,7 @@ import type {
   ChannelContext,
   SenderSummary,
   MessageRow,
+  SendOptions,
 } from './types'
 
 const FDA_HINT =
@@ -85,8 +86,11 @@ export const imessageAdapter: ChannelAdapter = {
   async sendMessage(
     _ctx: ChannelContext,
     recipient: string,
-    text: string
+    text: string,
+    _opts?: SendOptions
   ): Promise<void> {
+    // iMessage is text-only: HTML (_opts.html) is intentionally ignored; the
+    // caller always passes a plaintext `text` fallback.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const send = require('../imessage-send') as typeof import('../imessage-send')
     send.sendIMessage(recipient, text)

@@ -155,6 +155,62 @@ async function main() {
   const decoded = Buffer.from(sentRaw, 'base64url').toString('utf8')
   check(/To: carol@example.com/.test(decoded), 'send raw has To header')
   check(/Subject: Yo/.test(decoded) && /body text/.test(decoded), 'send raw carries parsed subject + body')
+  check(/Content-Type: text\/plain/.test(decoded), 'plain send stays text/plain')
+  check(!/multipart\/alternative/.test(decoded), 'plain send is NOT multipart')
+
+  // --- sendMessage: HTML (multipart/alternative) ---
+  calls.length = 0
+  await gmailAdapter.sendMessage(ctx, 'carol@example.com', '', {
+    subject: 'Morning Report',
+    html: '<h1>Hello</h1><p>Line one</p>',
+  })
+  const htmlSend = calls.find((c) => c.url.endsWith('/messages/send'))
+  const htmlRaw = Buffer.from(JSON.parse(htmlSend.init.body).raw, 'base64url').toString('utf8')
+  check(/Content-Type: multipart\/alternative/.test(htmlRaw), 'html send is multipart/alternative')
+  check(/Subject: Morning Report/.test(htmlRaw), 'html send carries explicit subject')
+  check(
+    /Content-Type: text\/plain/.test(htmlRaw) && /Content-Type: text\/html/.test(htmlRaw),
+    'html send has BOTH text/plain and text/html parts'
+  )
+  // Both part bodies are base64 encoded; decode the html part and check it.
+  const htmlPartB64 = htmlRaw
+    .split(/--=_snazi_[^\r\n]+/)
+    .find((seg) => /text\/html/.test(seg))
+    .split(/\r?\n\r?\n/)[1]
+    .replace(/\r?\n/g, '')
+  check(
+    Buffer.from(htmlPartB64, 'base64').toString('utf8') === '<h1>Hello</h1><p>Line one</p>',
+    'html part decodes back to the original HTML'
+  )
+  // Plaintext alternative was derived from the HTML (no explicit --text).
+  const textPartB64 = htmlRaw
+    .split(/--=_snazi_[^\r\n]+/)
+    .find((seg) => /text\/plain/.test(seg))
+    .split(/\r?\n\r?\n/)[1]
+    .replace(/\r?\n/g, '')
+  const textPart = Buffer.from(textPartB64, 'base64').toString('utf8')
+  check(/Hello/.test(textPart) && /Line one/.test(textPart), 'plaintext alt derived from HTML via htmlToText')
+  check(!/<h1>/.test(textPart), 'plaintext alt has tags stripped')
+
+  // --- sendMessage: HTML with explicit plaintext alternative ---
+  calls.length = 0
+  await gmailAdapter.sendMessage(ctx, 'carol@example.com', 'PLAIN ALT TEXT', {
+    subject: 'S',
+    html: '<p>rich</p>',
+  })
+  const raw2 = Buffer.from(
+    JSON.parse(calls.find((c) => c.url.endsWith('/messages/send')).init.body).raw,
+    'base64url'
+  ).toString('utf8')
+  const textPart2 = Buffer.from(
+    raw2
+      .split(/--=_snazi_[^\r\n]+/)
+      .find((seg) => /text\/plain/.test(seg))
+      .split(/\r?\n\r?\n/)[1]
+      .replace(/\r?\n/g, ''),
+    'base64'
+  ).toString('utf8')
+  check(textPart2 === 'PLAIN ALT TEXT', 'explicit --text becomes the plaintext alternative')
 
   // --- error surfacing ---
   globalThis.fetch = async () => resp({ error: 'boom' }, false, 502)

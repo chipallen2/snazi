@@ -24,6 +24,7 @@ import type {
   MessageActionResult,
   MessageRow,
   SenderSummary,
+  SendOptions,
 } from './types'
 import { getAccessToken } from './oauth'
 import { htmlToText, oauthAvailability, requireOAuth } from './mail'
@@ -395,10 +396,16 @@ export const outlookAdapter: ChannelAdapter = {
   async sendMessage(
     ctx: ChannelContext,
     recipient: string,
-    text: string
+    text: string,
+    opts?: SendOptions
   ): Promise<void> {
     const accessToken = await token(ctx)
-    const { subject, body } = splitSubject(text)
+    // Explicit subject wins; otherwise fall back to a `Subject:` line in text.
+    const parsed = splitSubject(text)
+    const subject = opts?.subject ?? parsed.subject
+    const bodyPayload = opts?.html
+      ? { contentType: 'HTML', content: opts.html }
+      : { contentType: 'Text', content: opts?.subject != null ? text : parsed.body }
     const res = await fetch(`${GRAPH}/me/sendMail`, {
       method: 'POST',
       headers: {
@@ -408,7 +415,7 @@ export const outlookAdapter: ChannelAdapter = {
       body: JSON.stringify({
         message: {
           subject,
-          body: { contentType: 'Text', content: body },
+          body: bodyPayload,
           toRecipients: [{ emailAddress: { address: recipient } }],
           ...(ctx.auth.user ? { from: { emailAddress: { address: ctx.auth.user } } } : {}),
         },

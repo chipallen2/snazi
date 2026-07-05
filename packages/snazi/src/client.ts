@@ -141,15 +141,23 @@ export async function remoteCheck(
   return getJson(url, token, q)
 }
 
-/** Remote equivalent of `snazi send` (never gated). */
+/**
+ * Remote equivalent of `snazi send` (never gated). `opts.html` upgrades email
+ * channels to an HTML send; `opts.subject` sets the subject. Both optional and
+ * omitted from the wire body when absent, so the plain-text path is unchanged.
+ */
 export async function remoteSend(
   cfg: Config,
   recipient: string,
   channel: string,
-  text: string
+  text: string,
+  opts?: { subject?: string; html?: string }
 ): Promise<{ status: number; json: unknown }> {
   const { url, token } = remoteBase(cfg)
-  return postJson(url, token, '/send', { recipient, channel, text })
+  const body: Record<string, unknown> = { recipient, channel, text }
+  if (opts?.subject) body.subject = opts.subject
+  if (opts?.html) body.html = opts.html
+  return postJson(url, token, '/send', body)
 }
 
 /**

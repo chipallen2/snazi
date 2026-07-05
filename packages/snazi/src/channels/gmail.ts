@@ -26,6 +26,7 @@ import type {
   MessageActionResult,
   MessageRow,
   SenderSummary,
+  SendOptions,
 } from './types'
 import { getAccessToken } from './oauth'
 import {
@@ -452,21 +453,19 @@ export const gmailAdapter: ChannelAdapter = {
   async sendMessage(
     ctx: ChannelContext,
     recipient: string,
-    text: string
+    text: string,
+    opts?: SendOptions
   ): Promise<void> {
     const accessToken = await token(ctx)
-    const { subject, body } = splitSubject(text)
     const from = ctx.auth.user
-    const headers = [
-      `To: ${recipient}`,
-      from ? `From: ${from}` : '',
-      `Subject: ${subject}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset="UTF-8"',
-    ]
-      .filter(Boolean)
-      .join('\r\n')
-    const raw = Buffer.from(`${headers}\r\n\r\n${body}`, 'utf8').toString('base64url')
+    const raw = opts?.html
+      ? buildHtmlRaw(recipient, from, opts.subject ?? splitSubject(text).subject, {
+          // Plaintext alternative: an explicit body if the caller passed one,
+          // else a readable text rendering of the HTML.
+          text: text.trim() ? splitSubject(text).body : htmlToText(opts.html),
+          html: opts.html,
+        })
+      : buildPlainRaw(recipient, from, ...subjectBody(text, opts?.subject))
     const res = await fetch(`${API_BASE}/messages/send`, {
       method: 'POST',
       headers: {
@@ -491,4 +490,76 @@ export function splitSubject(text: string): { subject: string; body: string } {
   const m = text.match(/^Subject:\s*(.+?)\r?\n\r?\n([\s\S]*)$/)
   if (m) return { subject: m[1].trim(), body: m[2] }
   return { subject: '(no subject)', body: text }
+}
+
+/**
+ * Resolve subject + body from a text blob and an optional explicit subject.
+ * An explicit subject wins and the whole text is treated as the body (no
+ * `Subject:` line stripping); otherwise fall back to splitSubject.
+ */
+function subjectBody(text: string, subject?: string): [string, string] {
+  if (subject != null) return [subject, text]
+  const s = splitSubject(text)
+  return [s.subject, s.body]
+}
+
+/** Encode a UTF-8 string as base64 wrapped at 76 chars (RFC 2045). */
+function b64Wrapped(s: string): string {
+  return (Buffer.from(s, 'utf8').toString('base64').match(/.{1,76}/g) ?? []).join('\r\n')
+}
+
+/** Build a plain-text RFC822 message, base64url-encoded for the Gmail API. */
+function buildPlainRaw(
+  recipient: string,
+  from: string | undefined,
+  subject: string,
+  body: string
+): string {
+  const headers = [
+    `To: ${recipient}`,
+    from ? `From: ${from}` : '',
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+  ]
+    .filter(Boolean)
+    .join('\r\n')
+  return Buffer.from(`${headers}\r\n\r\n${body}`, 'utf8').toString('base64url')
+}
+
+/**
+ * Build a multipart/alternative RFC822 message (text/plain + text/html),
+ * base64url-encoded for the Gmail API. Each part body is base64-encoded so
+ * long HTML lines never trip the SMTP 998-char line limit.
+ */
+function buildHtmlRaw(
+  recipient: string,
+  from: string | undefined,
+  subject: string,
+  parts: { text: string; html: string }
+): string {
+  const boundary = `=_snazi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  const headers = [
+    `To: ${recipient}`,
+    from ? `From: ${from}` : null,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ].filter((l): l is string => l !== null)
+  const lines = [
+    ...headers,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64Wrapped(parts.text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64Wrapped(parts.html),
+    `--${boundary}--`,
+  ].join('\r\n')
+  return Buffer.from(lines, 'utf8').toString('base64url')
 }

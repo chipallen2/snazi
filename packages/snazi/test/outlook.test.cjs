@@ -156,6 +156,35 @@ async function main() {
     'send payload carries the recipient'
   )
   check(payload.message.body.content === 'just a body', 'send payload carries the body')
+  check(payload.message.body.contentType === 'Text', 'plain send uses contentType Text')
+
+  // --- sendMessage: HTML body ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'carol@example.com', 'plain fallback', {
+    subject: 'Rich Report',
+    html: '<h1>Hi</h1><p>Body</p>',
+  })
+  const htmlCall = calls.find((c) => c.url.endsWith('/me/sendMail'))
+  const htmlPayload = JSON.parse(htmlCall.init.body)
+  check(htmlPayload.message.body.contentType === 'HTML', 'html send uses contentType HTML')
+  check(
+    htmlPayload.message.body.content === '<h1>Hi</h1><p>Body</p>',
+    'html send carries the raw HTML as body content'
+  )
+  check(htmlPayload.message.subject === 'Rich Report', 'html send uses the explicit subject')
+
+  // --- sendMessage: explicit --subject wins over a Subject: line in text ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'carol@example.com', 'Subject: FromBody\n\nhi', {
+    subject: 'FromFlag',
+  })
+  const subjCall = calls.find((c) => c.url.endsWith('/me/sendMail'))
+  const subjPayload = JSON.parse(subjCall.init.body)
+  check(subjPayload.message.subject === 'FromFlag', 'explicit subject overrides Subject: line')
+  check(
+    subjPayload.message.body.content === 'Subject: FromBody\n\nhi',
+    'with explicit subject, whole text is the body (no Subject: stripping)'
+  )
 
   if (failures === 0) {
     console.log('\nRESULT: PASS')

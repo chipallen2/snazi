@@ -81,6 +81,11 @@ const MAX_NAME_LEN = 64
 // a slightly larger body (sender + action + window), so allow up to 8 KiB.
 const MAX_BODY_BYTES = 8 * 1024
 const MAX_LABEL_BODY_BYTES = 4 * 1024 // /label only needs a few short fields
+// /send may carry a full HTML email body (e.g. a rich daily report), which is
+// far larger than a chat line. Allow up to 512 KiB for the send body.
+const MAX_SEND_BODY_BYTES = 512 * 1024
+// Upper bound on an HTML body (chars). Generous headroom for a rich email.
+const MAX_HTML_LEN = 400_000
 const CHANNEL_RE = /^[a-z0-9_-]+$/i
 // iMessage senders are phone numbers (+1555…) or emails. Keep it tight.
 const SENDER_RE = /^[A-Za-z0-9_.+@-]+$/
@@ -222,6 +227,42 @@ function parseText(v: string | null | undefined): string {
   if (t.length > MAX_MESSAGE_LEN) throw new Error('Text too long.')
   if (TEXT_CTRL_RE.test(t)) throw new Error('Invalid text.')
   return t
+}
+
+/**
+ * Like parseText but allows an empty/omitted value (returns ''). Used on /send
+ * when an HTML body is supplied and the plaintext alternative is optional.
+ */
+function parseOptionalText(v: string | null | undefined): string {
+  if (v == null || v === '') return ''
+  const t = String(v)
+  if (t.length > MAX_MESSAGE_LEN) throw new Error('Text too long.')
+  if (TEXT_CTRL_RE.test(t)) throw new Error('Invalid text.')
+  return t
+}
+
+/**
+ * Parse an optional HTML email body. Returns undefined when absent. Permits
+ * tabs/newlines (HTML formatting) but rejects other control chars, and caps
+ * the size. Same control-char policy as parseText (TEXT_CTRL_RE allows
+ * \t \r \n).
+ */
+function parseHtml(v: string | null): string | undefined {
+  if (v == null || v === '') return undefined
+  if (v.length > MAX_HTML_LEN) throw new Error('HTML too long.')
+  if (TEXT_CTRL_RE.test(v)) throw new Error('Invalid html.')
+  return v
+}
+
+/** Parse an optional email subject. Returns undefined when absent. */
+function parseSubject(v: string | null): string | undefined {
+  if (v == null) return undefined
+  const s = v.trim()
+  if (!s) return undefined
+  if (s.length > 512) throw new Error('Subject too long.')
+  // Subjects are single-line: no control chars at all (incl. CR/LF).
+  if (NAME_CTRL_RE.test(s)) throw new Error('Invalid subject.')
+  return s
 }
 
 /** Read a request body with a hard size cap (fails closed on overflow). */
@@ -440,16 +481,32 @@ async function handleSend(
   } catch {
     return { status: 400, body: { error: 'Invalid JSON body.' } }
   }
-  const b = (parsed ?? {}) as { recipient?: unknown; channel?: unknown; text?: unknown }
+  const b = (parsed ?? {}) as {
+    recipient?: unknown
+    channel?: unknown
+    text?: unknown
+    subject?: unknown
+    html?: unknown
+  }
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
-  const text = parseText(typeof b.text === 'string' ? b.text : null)
+  const html = parseHtml(typeof b.html === 'string' ? b.html : null)
+  const subject = parseSubject(typeof b.subject === 'string' ? b.subject : null)
+  // `text` is required for a plain send, but optional when `html` is provided
+  // (the adapter derives a plaintext alternative). Always pass a plaintext
+  // string so non-email channels still have something to send.
+  const rawText = typeof b.text === 'string' ? b.text : null
+  const text = html ? parseOptionalText(rawText) : parseText(rawText)
   const { adapter, ctx, error } = resolveSendableAdapter(channel, cfg)
   if (!adapter?.sendMessage || !ctx) {
     return { status: 501, body: { error } }
   }
   try {
-    await adapter.sendMessage(ctx, recipient, text)
+    const opts =
+      html || subject
+        ? { ...(html ? { html } : {}), ...(subject ? { subject } : {}) }
+        : undefined
+    await adapter.sendMessage(ctx, recipient, text, opts)
     return { status: 200, body: { ok: true, channel, recipient } }
   } catch (e) {
     return {
@@ -928,7 +985,9 @@ export function createServer(cfg: Config): http.Server {
               ? MAX_LABEL_BODY_BYTES
               : pathname === '/schwab/action'
                 ? MAX_ACTION_BODY_BYTES
-                : MAX_BODY_BYTES
+                : pathname === '/send'
+                  ? MAX_SEND_BODY_BYTES
+                  : MAX_BODY_BYTES
           const rawBody = await readBody(req, maxBytes)
           if (pathname === '/label') {
             const r = await handleLabel(cfg, rawBody)
