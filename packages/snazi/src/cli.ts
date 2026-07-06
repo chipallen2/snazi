@@ -232,6 +232,8 @@ async function cmdSend(args: string[]): Promise<number> {
   const text = flag(args, '--text')
   const subject = flag(args, '--subject')
   const fromOverride = flag(args, '--from')
+  const replyTo = flag(args, '--reply-to')
+  const replyAll = hasFlag(args, '--reply-all')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
 
@@ -251,7 +253,8 @@ async function cmdSend(args: string[]): Promise<number> {
     out({
       error:
         'Usage: snazi send <recipient> (--text <message> | --html-file <path> | ' +
-        '--html-text <html>) [--subject <s>] [--from <alias>] [--channel <id>]',
+        '--html-text <html>) [--subject <s>] [--from <alias>] [--reply-to <messageId>] ' +
+        '[--reply-all] [--channel <id>]',
     })
     return 2
   }
@@ -276,10 +279,18 @@ async function cmdSend(args: string[]): Promise<number> {
     return 1
   }
   try {
-    const opts: { subject?: string; html?: string; from?: string } = {}
+    const opts: {
+      subject?: string
+      html?: string
+      from?: string
+      replyToMessageId?: string
+      replyAll?: boolean
+    } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
     if (fromOverride != null) opts.from = fromOverride
+    if (replyTo != null) opts.replyToMessageId = replyTo
+    if (replyAll) opts.replyAll = true
     await adapter.sendMessage(
       ctx,
       target,
@@ -649,6 +660,8 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   const text = flag(args, '--text')
   const subject = flag(args, '--subject')
   const fromOverride = flag(args, '--from')
+  const replyTo = flag(args, '--reply-to')
+  const replyAll = hasFlag(args, '--reply-all')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
 
@@ -670,7 +683,8 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
     out({
       error:
         'Usage: snazi remote-send <recipient> (--text <message> | ' +
-        '--html-file <path> | --html-text <html>) [--subject <s>] [--from <alias>] [--channel <id>]',
+        '--html-file <path> | --html-text <html>) [--subject <s>] [--from <alias>] ' +
+        '[--reply-to <messageId>] [--reply-all] [--channel <id>]',
     })
     return 2
   }
@@ -684,10 +698,18 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   }
   const cfg = loadRemoteConfig()
   try {
-    const opts: { subject?: string; html?: string; from?: string } = {}
+    const opts: {
+      subject?: string
+      html?: string
+      from?: string
+      replyToMessageId?: string
+      replyAll?: boolean
+    } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
     if (fromOverride != null) opts.from = fromOverride
+    if (replyTo != null) opts.replyToMessageId = replyTo
+    if (replyAll) opts.replyAll = true
     // text may be omitted for an HTML-only send; the server/adapter derives a
     // plaintext alternative from the HTML in that case.
     const { status, json } = await remoteSend(cfg, target, channel, text ?? '', opts)
@@ -878,6 +900,7 @@ Usage:
   snazi read <sender> [--channel <id>] [--since <min>]  Show message text — only if sender is approved
   snazi send <recipient> --text <message> [--channel <id>]  Send a message (never gated)
                                                         Email: add --html-file <path>|--html-text <html> [--subject <s>] to send HTML
+                                                        Reply (real threading): add --reply-to <messageId> [--reply-all] (id comes from a read row)
   snazi check <sender> --channel <id>                   Print one sender's approval status
   snazi channels list                                   List configured channels (instances) + adapter availability here
   snazi channels add <id> [--type <t>] [--name <n>] [auth flags]   Configure a channel instance (e.g. id gmail-work, type gmail)
@@ -910,6 +933,7 @@ Agent machine (set up with 'snazi init-agent'; calls your messages machine's gat
   snazi remote-read <sender> [--channel <id>] [--since <min>]  Message text (remote) — only if approved
   snazi remote-send <recipient> --text <msg> [--channel <id>]  Send a message (remote; never gated)
                                                         Email: add --html-file <path>|--html-text <html> [--subject <s>] to send HTML
+                                                        Reply (real threading): add --reply-to <messageId> [--reply-all]; subject auto-derived. read rows now include each message id
   snazi remote-resolve [<name>] [--channel <id>]        Resolve a name → sender address(es) (empty = address book)
   snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
   snazi remote-action <archive|delete|markRead|markUnread> (--sender <addr> | --message-id <id>) [--channel <id>] [--since <min>]

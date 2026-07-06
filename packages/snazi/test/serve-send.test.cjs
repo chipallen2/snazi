@@ -38,9 +38,34 @@ function installFetch() {
     if (u.includes('oauth2.googleapis.com/token') || u.includes('login.microsoftonline.com')) {
       return resp({ access_token: 'AT', expires_in: 3600 })
     }
+    // Gmail: fetch original message metadata for a threaded reply.
+    if (/\/messages\/[^/?]+\?/.test(u) && u.includes('format=metadata')) {
+      return resp({
+        id: 'orig-1',
+        threadId: 'T-1',
+        payload: {
+          headers: [
+            { name: 'Message-ID', value: '<o@x>' },
+            { name: 'References', value: '' },
+            { name: 'Subject', value: 'Hi' },
+            { name: 'To', value: 'chip@gmail.com' },
+            { name: 'Cc', value: '' },
+          ],
+        },
+      })
+    }
     if (u.endsWith('/messages/send')) {
       sends.push({ provider: 'gmail', body: JSON.parse(init.body) })
       return resp({ id: 'sent-1' })
+    }
+    // Outlook native reply endpoints (match before /me/sendMail is irrelevant).
+    if (/\/me\/messages\/[^/]+\/replyAll$/.test(u)) {
+      sends.push({ provider: 'outlook-replyAll', body: JSON.parse(init.body) })
+      return resp({}, true, 202)
+    }
+    if (/\/me\/messages\/[^/]+\/reply$/.test(u)) {
+      sends.push({ provider: 'outlook-reply', body: JSON.parse(init.body) })
+      return resp({}, true, 202)
     }
     if (u.endsWith('/me/sendMail')) {
       sends.push({ provider: 'outlook', body: JSON.parse(init.body) })
@@ -165,6 +190,46 @@ async function main() {
     body: { channel: 'gmail-chip', recipient: 'carol@example.com', subject: 'Big', html: bigHtml },
   })
   check(r.status === 200 && r.json.ok === true, 'large (>8KiB) html body accepted on /send')
+
+  // --- gmail reply threads through /send (replyToMessageId) ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'gmail-chip',
+      recipient: 'alice@example.com',
+      text: 'thanks, got it',
+      replyToMessageId: 'orig-1',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'gmail reply send -> 200 ok')
+  const gReply = sends.find((s) => s.provider === 'gmail')
+  check(gReply.body.threadId === 'T-1', 'serve /send sets original threadId on gmail reply')
+  raw = Buffer.from(gReply.body.raw, 'base64url').toString('utf8')
+  check(/In-Reply-To: <o@x>/.test(raw), 'serve /send builds In-Reply-To for gmail reply')
+  check(/Subject: Re: Hi/.test(raw), 'serve /send derives Re: subject for gmail reply')
+
+  // --- outlook reply routes to the native /reply endpoint ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'outlook-work',
+      recipient: 'alice@example.com',
+      text: 'ok sounds good',
+      replyToMessageId: 'in-9',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'outlook reply send -> 200 ok')
+  const oReply = sends.find((s) => s.provider === 'outlook-reply')
+  check(Boolean(oReply), 'serve /send routes outlook reply to native /reply endpoint')
+  check(oReply.body.comment === 'ok sounds good', 'serve /send carries outlook reply comment')
+  check(
+    !sends.some((s) => s.provider === 'outlook'),
+    'outlook reply does NOT hit send-new (/me/sendMail)'
+  )
 
   // --- missing body (no text, no html) -> 400 ---
   installFetch()

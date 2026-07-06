@@ -118,6 +118,20 @@ export interface SendOptions {
    * account's own address (ctx.auth.user) is used.
    */
   from?: string
+  /**
+   * Native id of the message being replied to (email channels only). When set,
+   * the adapter sends a REAL threaded reply: Gmail builds In-Reply-To/
+   * References headers and sets the original threadId; Outlook uses Graph's
+   * native reply endpoints. When omitted, a brand-new message is sent (which
+   * does NOT thread in the recipient's client). Get this id from a read row's
+   * `id` field - usually the latest incoming message.
+   */
+  replyToMessageId?: string
+  /**
+   * When replying, also address everyone on the original To + Cc (minus the
+   * sending account's own address). Ignored unless `replyToMessageId` is set.
+   */
+  replyAll?: boolean
 }
 
 export interface ChannelContext {

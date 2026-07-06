@@ -299,6 +299,8 @@ function rowFrom(m: GraphMessage, incoming: boolean): MessageRow {
   return {
     date: d.toISOString(),
     text,
+    // Native Graph message id: the value to pass back as --reply-to.
+    id: m.id,
     from_me: !incoming,
     direction: incoming ? 'incoming' : 'outgoing',
   }
@@ -355,7 +357,7 @@ export const outlookAdapter: ChannelAdapter = {
     const accessToken = await token(ctx)
     const addr = sender.toLowerCase()
     const since = isoSince(sinceMinutes)
-    const select = 'subject,from,toRecipients,receivedDateTime,sentDateTime,body,bodyPreview'
+    const select = 'id,subject,from,toRecipients,receivedDateTime,sentDateTime,body,bodyPreview'
 
     // Incoming: messages from this address (server-side filter).
     const inboundUrl = graphUrl('/me/messages', {
@@ -400,6 +402,22 @@ export const outlookAdapter: ChannelAdapter = {
     opts?: SendOptions
   ): Promise<void> {
     const accessToken = await token(ctx)
+
+    // Reply path: Microsoft Graph has NATIVE reply endpoints that handle
+    // subject, threading, and quoting automatically, so we don't reconstruct
+    // any headers like Gmail. `comment` accepts plain text or HTML.
+    // NOTE / known limitation: Graph's /reply and /replyAll do NOT honor a From
+    // override, so `--from` is ignored on a reply. We prefer threading the reply
+    // correctly over honoring the alias, rather than silently dropping the
+    // reply-to id.
+    if (opts?.replyToMessageId) {
+      const enc = encodeURIComponent(opts.replyToMessageId)
+      const endpoint = opts.replyAll ? 'replyAll' : 'reply'
+      const comment = opts.html ?? text
+      await graphPost(accessToken, `${GRAPH}/me/messages/${enc}/${endpoint}`, { comment })
+      return
+    }
+
     // A verified send-as alias may override the From address.
     const fromAddr = opts?.from ?? ctx.auth.user
     // Explicit subject wins; otherwise fall back to a `Subject:` line in text.

@@ -62,6 +62,13 @@ function installFetch() {
     if (u.endsWith('/me/sendMail')) {
       return resp({}, true, 202) // Graph returns 202 Accepted, no body
     }
+    // Native reply / replyAll endpoints (match before the generic /me/messages).
+    if (/\/me\/messages\/[^/]+\/replyAll$/.test(u)) {
+      return resp({}, true, 202)
+    }
+    if (/\/me\/messages\/[^/]+\/reply$/.test(u)) {
+      return resp({}, true, 202)
+    }
     if (u.includes('/mailFolders/inbox/messages')) {
       return resp({
         value: [
@@ -80,6 +87,7 @@ function installFetch() {
       return resp({
         value: [
           {
+            id: 'sent-1',
             subject: 'Re: hi',
             toRecipients: [{ emailAddress: { address: 'alice@example.com' } }],
             sentDateTime: '2024-01-03T00:00:00Z',
@@ -98,6 +106,7 @@ function installFetch() {
       return resp({
         value: [
           {
+            id: 'in-1',
             subject: 'Hi',
             from: { emailAddress: { address: 'alice@example.com' } },
             receivedDateTime: '2024-01-02T00:00:00Z',
@@ -141,6 +150,7 @@ async function main() {
     !rows.some((r) => /Unrelated|nope/.test(r.text)),
     'sent mail to a different recipient is excluded'
   )
+  check(inbound.id === 'in-1', 'read row exposes native Graph message id')
   check(
     rows[0].date <= rows[1].date,
     'rows sorted chronologically'
@@ -184,6 +194,50 @@ async function main() {
   check(
     subjPayload.message.body.content === 'Subject: FromBody\n\nhi',
     'with explicit subject, whole text is the body (no Subject: stripping)'
+  )
+
+  // --- sendMessage: native Graph reply endpoint ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'alice@example.com', 'my reply', {
+    replyToMessageId: 'in-1',
+  })
+  const replyCall = calls.find((c) => /\/me\/messages\/in-1\/reply$/.test(c.url))
+  check(
+    Boolean(replyCall) && replyCall.init.method === 'POST',
+    'reply POSTs to /me/messages/{id}/reply'
+  )
+  check(
+    JSON.parse(replyCall.init.body).comment === 'my reply',
+    'reply sends the text as the comment'
+  )
+  check(
+    !calls.some((c) => c.url.endsWith('/me/sendMail')),
+    'reply does NOT hit the send-new-message path'
+  )
+
+  // --- sendMessage: native Graph reply-all endpoint ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'alice@example.com', 'all reply', {
+    replyToMessageId: 'in-1',
+    replyAll: true,
+  })
+  const replyAllCall = calls.find((c) => /\/me\/messages\/in-1\/replyAll$/.test(c.url))
+  check(Boolean(replyAllCall), 'reply-all POSTs to /me/messages/{id}/replyAll')
+  check(
+    JSON.parse(replyAllCall.init.body).comment === 'all reply',
+    'reply-all sends the text as the comment'
+  )
+
+  // --- sendMessage: reply uses html as the comment when provided ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'alice@example.com', 'plain fallback', {
+    replyToMessageId: 'in-1',
+    html: '<p>rich reply</p>',
+  })
+  const htmlReply = calls.find((c) => /\/me\/messages\/in-1\/reply$/.test(c.url))
+  check(
+    JSON.parse(htmlReply.init.body).comment === '<p>rich reply</p>',
+    'reply uses html as comment when provided'
   )
 
   if (failures === 0) {

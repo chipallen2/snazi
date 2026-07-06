@@ -256,6 +256,41 @@ snazi remote-send "alice@example.com" --channel gmail-work \
 - HTML is text-only, no attachments; keep bodies reasonable (server caps the
   `/send` body at 512 KiB).
 
+### Reply and thread (real email threading)
+
+A plain `send` with a `Subject: Re: …` line creates a **brand-new** email - it
+does NOT thread under the original conversation in the recipient's client. To
+send a genuine, threaded reply, pass `--reply-to <messageId>` (add `--reply-all`
+to also address everyone on the original To + Cc, minus your own address):
+
+```bash
+# 1) Read the conversation - each message row now includes its native id.
+snazi remote-read "alice@example.com" --channel gmail-work --since 1440
+#   -> messages: [ { id: "18f...", direction: "incoming", text: "..." }, ... ]
+
+# 2) Reply to a specific message id (usually the latest incoming one).
+#    No Subject: line needed - it is auto-derived (single "Re: " prefix).
+snazi remote-send "alice@example.com" --channel gmail-work \
+  --reply-to "18f..." --text "Sounds good, see you then."
+
+# 3) Reply to everyone on the original thread (To + Cc, minus you):
+snazi remote-send "alice@example.com" --channel gmail-work \
+  --reply-to "18f..." --reply-all --text "Confirming for the group."
+```
+
+- **Gmail** builds RFC 5322 `In-Reply-To` / `References` headers from the
+  original message and sets its `threadId` on send, so the reply threads in
+  Gmail and other clients. The subject is reused with a single `Re: ` prefix
+  (never doubled) unless you override it with `--subject`.
+- **Outlook** uses Microsoft Graph's native `/reply` and `/replyAll`
+  endpoints, which handle subject, threading, and quoting automatically.
+  Known limitation: Graph reply does not honor a `--from` alias override, so
+  `--from` is ignored on an Outlook reply (the reply-to id is preferred).
+- Works with `--html-file` / `--html-text` too (the HTML becomes the reply body).
+- **Without `--reply-to`, a `Subject: Re: …` send does NOT thread** - only use
+  that pattern for a genuinely new/unrelated email, never call it a reply.
+- iMessage has no reply concept here; `--reply-to` is ignored on that channel.
+
 ### Credentials live ONLY on the messages machine
 
 OAuth tokens / secrets are written to `~/.snazi/config.json` (created `0600`) and

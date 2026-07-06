@@ -55,6 +55,7 @@ interface GmailPart {
 }
 interface GmailMessage {
   id: string
+  threadId?: string
   internalDate?: string
   snippet?: string
   payload?: GmailPart & { headers?: GmailHeader[] }
@@ -351,6 +352,8 @@ export const gmailAdapter: ChannelAdapter = {
       return {
         date: isoDate(m),
         text,
+        // Native Gmail message id: the value to pass back as --reply-to.
+        id: m.id,
         from_me: !incoming,
         direction: incoming ? ('incoming' as const) : ('outgoing' as const),
       }
@@ -460,27 +463,136 @@ export const gmailAdapter: ChannelAdapter = {
     // A verified "send mail as" alias may override the From address; otherwise
     // fall back to the account's own address.
     const from = opts?.from ?? ctx.auth.user
-    const raw = opts?.html
-      ? buildHtmlRaw(recipient, from, opts.subject ?? splitSubject(text).subject, {
-          // Plaintext alternative: an explicit body if the caller passed one,
-          // else a readable text rendering of the HTML.
-          text: text.trim() ? splitSubject(text).body : htmlToText(opts.html),
-          html: opts.html,
-        })
-      : buildPlainRaw(recipient, from, ...subjectBody(text, opts?.subject))
+
+    // Reply path: build RFC 5322 threading headers from the original message
+    // and set threadId so Gmail actually threads the reply. Kept SEPARATE from
+    // the new-message path below so a plain send stays byte-identical.
+    const sendBody: { raw: string; threadId?: string } = opts?.replyToMessageId
+      ? await buildReplyBody(accessToken, recipient, from, text, opts)
+      : {
+          raw: opts?.html
+            ? buildHtmlRaw(recipient, from, opts.subject ?? splitSubject(text).subject, {
+                // Plaintext alternative: an explicit body if the caller passed one,
+                // else a readable text rendering of the HTML.
+                text: text.trim() ? splitSubject(text).body : htmlToText(opts.html),
+                html: opts.html,
+              })
+            : buildPlainRaw(recipient, from, ...subjectBody(text, opts?.subject)),
+        }
     const res = await fetch(`${API_BASE}/messages/send`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${accessToken}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ raw }),
+      body: JSON.stringify(sendBody),
     })
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')
       throw new Error(`Gmail send failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
     }
   },
+}
+
+/**
+ * Parse a comma-separated address-list header (To/Cc) into bare, lowercased
+ * emails, dropping any that don't parse. Handles `"Name" <a@b>, c@d` forms.
+ */
+function parseAddressList(header: string): string[] {
+  if (!header || !header.trim()) return []
+  return header
+    .split(',')
+    .map((part) => extractEmail(part))
+    .filter((a): a is string => Boolean(a))
+}
+
+/**
+ * Add a single `Re: ` prefix to a subject, without doubling up when it already
+ * starts with one (case-insensitive). An empty subject becomes `Re:`.
+ */
+function replySubject(origSubject: string): string {
+  const s = (origSubject ?? '').trim()
+  if (/^re:/i.test(s)) return s
+  return s ? `Re: ${s}` : 'Re:'
+}
+
+/**
+ * Build the Gmail /messages/send body for a REAL threaded reply. Fetches the
+ * original message's threading metadata, derives In-Reply-To / References /
+ * Subject, optionally CCs everyone (reply-all, minus our own addresses), and
+ * returns `{ raw, threadId }` so Gmail threads it in the recipient's client.
+ */
+async function buildReplyBody(
+  accessToken: string,
+  recipient: string,
+  from: string | undefined,
+  text: string,
+  opts: SendOptions
+): Promise<{ raw: string; threadId?: string }> {
+  const orig = await apiGet<GmailMessage>(
+    accessToken,
+    `/messages/${encodeURIComponent(opts.replyToMessageId as string)}`,
+    {
+      format: 'metadata',
+      metadataHeaders: ['Message-ID', 'References', 'Subject', 'From', 'To', 'Cc'],
+    }
+  )
+  const origMessageId = headerValue(orig, 'Message-ID')
+  const origReferences = headerValue(orig, 'References')
+  const origSubject = headerValue(orig, 'Subject')
+
+  // Explicit --subject wins; otherwise reuse the original with one Re: prefix.
+  const subject = opts.subject ?? replySubject(origSubject)
+
+  // Standard RFC 5322 threading: References = prior References + this Message-ID.
+  const references = [origReferences, origMessageId]
+    .map((s) => (s || '').trim())
+    .filter(Boolean)
+    .join(' ')
+
+  // reply-all: CC original To + Cc, minus our own address(es) and the primary
+  // recipient (which stays whatever the caller passed).
+  let cc: string[] = []
+  if (opts.replyAll) {
+    const own = new Set(
+      [from, recipient].filter((a): a is string => Boolean(a)).map((a) => a.toLowerCase())
+    )
+    const everyone = [
+      ...parseAddressList(headerValue(orig, 'To')),
+      ...parseAddressList(headerValue(orig, 'Cc')),
+    ]
+    const seen = new Set<string>()
+    cc = everyone.filter((a) => {
+      if (own.has(a) || seen.has(a)) return false
+      seen.add(a)
+      return true
+    })
+  }
+
+  const threadHeaders: Record<string, string> = {}
+  if (origMessageId) threadHeaders['In-Reply-To'] = origMessageId
+  if (references) threadHeaders['References'] = references
+  if (cc.length) threadHeaders['Cc'] = cc.join(', ')
+
+  const raw = opts.html
+    ? buildHtmlRaw(
+        recipient,
+        from,
+        subject,
+        {
+          text: text.trim() ? splitSubject(text).body : htmlToText(opts.html),
+          html: opts.html,
+        },
+        threadHeaders
+      )
+    : buildPlainRaw(
+        recipient,
+        from,
+        subject,
+        opts.subject != null ? text : splitSubject(text).body,
+        threadHeaders
+      )
+  return { raw, threadId: orig.threadId }
 }
 
 /**
@@ -510,23 +622,37 @@ function b64Wrapped(s: string): string {
   return (Buffer.from(s, 'utf8').toString('base64').match(/.{1,76}/g) ?? []).join('\r\n')
 }
 
-/** Build a plain-text RFC822 message, base64url-encoded for the Gmail API. */
+/**
+ * Build a plain-text RFC822 message, base64url-encoded for the Gmail API.
+ * `extra` carries optional threading headers (In-Reply-To/References/Cc) for a
+ * reply; omitted for a normal send so the output stays unchanged.
+ */
 function buildPlainRaw(
   recipient: string,
   from: string | undefined,
   subject: string,
-  body: string
+  body: string,
+  extra?: Record<string, string>
 ): string {
   const headers = [
     `To: ${recipient}`,
     from ? `From: ${from}` : '',
     `Subject: ${subject}`,
+    ...extraHeaderLines(extra),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
   ]
     .filter(Boolean)
     .join('\r\n')
   return Buffer.from(`${headers}\r\n\r\n${body}`, 'utf8').toString('base64url')
+}
+
+/** Render optional extra headers as `Name: value` lines (empty list when none). */
+function extraHeaderLines(extra?: Record<string, string>): string[] {
+  if (!extra) return []
+  return Object.entries(extra)
+    .filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `${k}: ${v}`)
 }
 
 /**
@@ -538,13 +664,15 @@ function buildHtmlRaw(
   recipient: string,
   from: string | undefined,
   subject: string,
-  parts: { text: string; html: string }
+  parts: { text: string; html: string },
+  extra?: Record<string, string>
 ): string {
   const boundary = `=_snazi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
   const headers = [
     `To: ${recipient}`,
     from ? `From: ${from}` : null,
     `Subject: ${subject}`,
+    ...extraHeaderLines(extra),
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ].filter((l): l is string => l !== null)

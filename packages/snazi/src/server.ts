@@ -501,12 +501,16 @@ async function handleSend(
     subject?: unknown
     html?: unknown
     from?: unknown
+    replyToMessageId?: unknown
+    replyAll?: unknown
   }
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
   const html = parseHtml(typeof b.html === 'string' ? b.html : null)
   const subject = parseSubject(typeof b.subject === 'string' ? b.subject : null)
   const from = parseFrom(typeof b.from === 'string' ? b.from : null)
+  const replyToMessageId = parseMessageId(b.replyToMessageId)
+  const replyAll = b.replyAll === true
   // `text` is required for a plain send, but optional when `html` is provided
   // (the adapter derives a plaintext alternative). Always pass a plaintext
   // string so non-email channels still have something to send.
@@ -518,8 +522,14 @@ async function handleSend(
   }
   try {
     const opts =
-      html || subject || from
-        ? { ...(html ? { html } : {}), ...(subject ? { subject } : {}), ...(from ? { from } : {}) }
+      html || subject || from || replyToMessageId || replyAll
+        ? {
+            ...(html ? { html } : {}),
+            ...(subject ? { subject } : {}),
+            ...(from ? { from } : {}),
+            ...(replyToMessageId ? { replyToMessageId } : {}),
+            ...(replyAll ? { replyAll: true } : {}),
+          }
         : undefined
     await adapter.sendMessage(ctx, recipient, text, opts)
     return { status: 200, body: { ok: true, channel, recipient } }

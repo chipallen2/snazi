@@ -43,6 +43,13 @@ export interface SenderSummary {
 export interface MessageRow {
   date: string
   text: string
+  /**
+   * Native provider message id (e.g. the Gmail/Outlook message id). This is
+   * the value a caller passes back as `--reply-to` to send a REAL threaded
+   * reply. Optional because not every channel exposes one (iMessage leaves it
+   * undefined). Almost always the LATEST incoming row is the one to reply to.
+   */
+  id?: string
   /** True when the message was sent by the user (outbound), false when received. */
   from_me: boolean
   /** Human-friendly direction tag mirroring `from_me`. */

@@ -46,6 +46,24 @@ function metaMsg(id, from, internalDate) {
   }
 }
 
+// An original message (metadata form) used as the target of a threaded reply.
+function origReplyMsg(id, subject, threadId) {
+  return {
+    id,
+    threadId,
+    payload: {
+      headers: [
+        { name: 'Message-ID', value: '<orig-msg-id@mail.example.com>' },
+        { name: 'References', value: '<ref-a@x> <ref-b@x>' },
+        { name: 'Subject', value: subject },
+        { name: 'From', value: 'Alice <alice@example.com>' },
+        { name: 'To', value: 'Chip <chip@gmail.com>, Dave <dave@example.com>' },
+        { name: 'Cc', value: 'Eve <eve@example.com>' },
+      ],
+    },
+  }
+}
+
 function fullMsg(id, from, subject, body, internalDate) {
   return {
     id,
@@ -101,6 +119,9 @@ function installFetch() {
       if (u.includes('format=metadata')) {
         if (id === 'm1') return resp(metaMsg('m1', 'Alice <alice@example.com>', '1000'))
         if (id === 'm2') return resp(metaMsg('m2', 'bob@example.com', '2000'))
+        // Reply originals: one plain subject, one already-"Re:" subject.
+        if (id === 'orig-1') return resp(origReplyMsg('orig-1', 'Project update', 'THREAD-XYZ'))
+        if (id === 'orig-2') return resp(origReplyMsg('orig-2', 'Re: Already replied', 'THREAD-2'))
       }
       if (u.includes('format=full')) {
         if (id === 'r1')
@@ -142,6 +163,7 @@ async function main() {
   // --- readMessagesFrom ---
   const rows = await gmailAdapter.readMessagesFrom(ctx, 'alice@example.com', 120)
   check(rows.length === 1, `reads 1 message from alice (got ${rows.length})`)
+  check(rows[0].id === 'r1', 'read row exposes native Gmail message id')
   check(/Hi there/.test(rows[0].text) && /hello world/.test(rows[0].text), 'subject + decoded body in text')
   check(rows[0].direction === 'incoming' && rows[0].from_me === false, 'incoming message tagged correctly')
   check(rows[0].date === new Date(1500).toISOString(), 'date derived from internalDate')
@@ -220,6 +242,57 @@ async function main() {
     'base64'
   ).toString('utf8')
   check(textPart2 === 'PLAIN ALT TEXT', 'explicit --text becomes the plaintext alternative')
+
+  // --- sendMessage: REAL threaded reply (In-Reply-To/References/threadId) ---
+  installFetch()
+  clearTokenCache()
+  await gmailAdapter.sendMessage(ctx, 'alice@example.com', 'thanks, got it', {
+    replyToMessageId: 'orig-1',
+  })
+  const replySend = calls.find((c) => c.url.endsWith('/messages/send'))
+  check(Boolean(replySend), 'reply POSTs to /messages/send')
+  const replyParsed = JSON.parse(replySend.init.body)
+  check(replyParsed.threadId === 'THREAD-XYZ', 'reply sets original threadId on the send body')
+  const replyRaw = Buffer.from(replyParsed.raw, 'base64url').toString('utf8')
+  check(
+    /In-Reply-To: <orig-msg-id@mail\.example\.com>/.test(replyRaw),
+    'reply sets In-Reply-To to the original Message-ID'
+  )
+  check(
+    /References: <ref-a@x> <ref-b@x> <orig-msg-id@mail\.example\.com>/.test(replyRaw),
+    'reply appends original Message-ID to prior References'
+  )
+  check(/Subject: Re: Project update/.test(replyRaw), 'reply subject gets a single Re: prefix')
+  check(/To: alice@example\.com/.test(replyRaw), 'reply To is the caller-supplied recipient')
+  check(!/^Cc:/m.test(replyRaw), 'plain reply (no reply-all) has no Cc header')
+  check(/thanks, got it/.test(replyRaw), 'reply body carries the message text')
+
+  // --- reply must NOT double-prefix an already-"Re:" subject ---
+  installFetch()
+  await gmailAdapter.sendMessage(ctx, 'alice@example.com', 'ok', { replyToMessageId: 'orig-2' })
+  const reRaw = Buffer.from(
+    JSON.parse(calls.find((c) => c.url.endsWith('/messages/send')).init.body).raw,
+    'base64url'
+  ).toString('utf8')
+  check(/Subject: Re: Already replied/.test(reRaw), 'already-Re: subject kept as-is')
+  check(!/Re: Re:/.test(reRaw), 'no double Re: Re: prefix')
+
+  // --- reply-all CCs original To+Cc, excluding our own address ---
+  installFetch()
+  await gmailAdapter.sendMessage(ctx, 'alice@example.com', 'reply all body', {
+    replyToMessageId: 'orig-1',
+    replyAll: true,
+    from: 'chip@gmail.com',
+  })
+  const raRaw = Buffer.from(
+    JSON.parse(calls.find((c) => c.url.endsWith('/messages/send')).init.body).raw,
+    'base64url'
+  ).toString('utf8')
+  const ccLine = (raRaw.match(/^Cc: (.+)$/m) || [])[1] || ''
+  check(/dave@example\.com/.test(ccLine), 'reply-all CCs a non-owner from original To')
+  check(/eve@example\.com/.test(ccLine), 'reply-all CCs a non-owner from original Cc')
+  check(!/chip@gmail\.com/.test(ccLine), 'reply-all excludes our own (from) address from Cc')
+  check(!/alice@example\.com/.test(ccLine), 'reply-all excludes the primary recipient from Cc')
 
   // --- error surfacing ---
   globalThis.fetch = async () => resp({ error: 'boom' }, false, 502)
