@@ -1,6 +1,6 @@
 {
   "name": "@chipallen2/snazi",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "On-demand local gate for your messages. Reveals WHO contacted you; only reveals WHAT for approved senders. iMessage today, pluggable channels next.",
   "license": "MIT",
   "homepage": "https://snazi.dev",
