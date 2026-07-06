@@ -158,6 +158,15 @@ async function main() {
   check(/Content-Type: text\/plain/.test(decoded), 'plain send stays text/plain')
   check(!/multipart\/alternative/.test(decoded), 'plain send is NOT multipart')
 
+  // --- sendMessage: From-override (send-as alias) ---
+  calls.length = 0
+  await gmailAdapter.sendMessage(ctx, 'carol@example.com', 'Subject: Yo\n\nbody', {
+    from: 'thetman66@gmail.com',
+  })
+  const aliasSend = calls.find((c) => c.url.endsWith('/messages/send'))
+  const aliasRaw = Buffer.from(JSON.parse(aliasSend.init.body).raw, 'base64url').toString('utf8')
+  check(/From: thetman66@gmail.com/.test(aliasRaw), 'from-override sets the From header to the alias')
+
   // --- sendMessage: HTML (multipart/alternative) ---
   calls.length = 0
   await gmailAdapter.sendMessage(ctx, 'carol@example.com', '', {

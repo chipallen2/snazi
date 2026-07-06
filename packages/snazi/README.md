@@ -216,6 +216,22 @@ a `Subject: …` line followed by a blank line (as above); otherwise the subject
 defaults to `(no subject)`. You can also set the subject explicitly with
 `--subject "…"`, which takes precedence over any `Subject:` line.
 
+### Send as an alias (`--from`)
+
+Email channels can override the `From` address with `--from <address>` when the
+sending account has that address configured as a **verified "send mail as"**
+alias (Gmail/Outlook require a one-time confirmation of the alias). This lets
+one authenticated account send on behalf of another verified address:
+
+```bash
+snazi remote-send "alice@example.com" --channel gmail-personal \
+  --from "other.you@gmail.com" --subject "Hi" --text "body"
+```
+
+Works with plain text and HTML. If the alias is not verified on the account,
+the provider rejects or rewrites the `From` header. Omit `--from` to send from
+the account's own address.
+
 ### HTML email
 
 Email channels (`gmail`, `outlook`) can send **HTML** messages. Pass the HTML
@@ -341,7 +357,7 @@ machine gets least privilege.
 | `GET /list-new?channel=imessage&since=<min>` | bearer | `{ channel, since_minutes, senders: [{ sender, message_count, latest_at, status, label, contact_name }] }`. On check failure: `status` is `unknown` and an `error` field describes the failure. **Never message text.** |
 | `GET /check?sender=<addr>&channel=imessage` | bearer | `{ channel, sender, status, label, contact_name }`. On check failure: HTTP 502 with `{ error }`. |
 | `GET /read?sender=<addr>&channel=imessage&since=<min>` | bearer | `{ sender, channel, status, since_minutes, contact_name, messages }` **only if approved**; otherwise `403 { error: "Sender not approved. No messages for you.", status }`. On check failure: HTTP 502 with `{ error }`. |
-| `POST /send` body `{ recipient, channel, text, subject?, html? }` | bearer | Send an outbound message. **Never gated** — you can always send to anyone. `subject` sets the email subject; `html` sends an HTML email (Gmail multipart/alternative, Outlook contentType HTML) with `text` as the plaintext alternative (auto-derived from `html` when omitted). Body cap 512 KiB. Returns `{ ok: true, channel, recipient }` on success. |
+| `POST /send` body `{ recipient, channel, text, subject?, html?, from? }` | bearer | Send an outbound message. **Never gated** — you can always send to anyone. `subject` sets the email subject; `html` sends an HTML email (Gmail multipart/alternative, Outlook contentType HTML) with `text` as the plaintext alternative (auto-derived from `html` when omitted); `from` overrides the From address (email channels only, requires a verified send-as alias on the account). Body cap 512 KiB. Returns `{ ok: true, channel, recipient }` on success. |
 | `GET /resolve?name=<q>&channel=imessage` | bearer | `{ channel, query, matches: [{ sender_address, label, status, contact_name }] }`. Empty/omitted `name` returns every labelled sender. **Never message text.** |
 | `POST /label` body `{ sender, channel, name }` | bearer | Set a sender's display label via an UPDATE-only web endpoint. **Cannot create a row or change `status`**, so it cannot open the gate. 404 if the sender is not on the list yet. |
 

@@ -457,7 +457,9 @@ export const gmailAdapter: ChannelAdapter = {
     opts?: SendOptions
   ): Promise<void> {
     const accessToken = await token(ctx)
-    const from = ctx.auth.user
+    // A verified "send mail as" alias may override the From address; otherwise
+    // fall back to the account's own address.
+    const from = opts?.from ?? ctx.auth.user
     const raw = opts?.html
       ? buildHtmlRaw(recipient, from, opts.subject ?? splitSubject(text).subject, {
           // Plaintext alternative: an explicit body if the caller passed one,

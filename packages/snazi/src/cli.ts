@@ -231,6 +231,7 @@ async function cmdSend(args: string[]): Promise<number> {
   const rawRecipient = positionals[0]
   const text = flag(args, '--text')
   const subject = flag(args, '--subject')
+  const fromOverride = flag(args, '--from')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
 
@@ -250,7 +251,7 @@ async function cmdSend(args: string[]): Promise<number> {
     out({
       error:
         'Usage: snazi send <recipient> (--text <message> | --html-file <path> | ' +
-        '--html-text <html>) [--subject <s>] [--channel <id>]',
+        '--html-text <html>) [--subject <s>] [--from <alias>] [--channel <id>]',
     })
     return 2
   }
@@ -275,9 +276,10 @@ async function cmdSend(args: string[]): Promise<number> {
     return 1
   }
   try {
-    const opts: { subject?: string; html?: string } = {}
+    const opts: { subject?: string; html?: string; from?: string } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
+    if (fromOverride != null) opts.from = fromOverride
     await adapter.sendMessage(
       ctx,
       target,
@@ -646,6 +648,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   const rawRecipient = positionals[0]
   const text = flag(args, '--text')
   const subject = flag(args, '--subject')
+  const fromOverride = flag(args, '--from')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
 
@@ -667,7 +670,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
     out({
       error:
         'Usage: snazi remote-send <recipient> (--text <message> | ' +
-        '--html-file <path> | --html-text <html>) [--subject <s>] [--channel <id>]',
+        '--html-file <path> | --html-text <html>) [--subject <s>] [--from <alias>] [--channel <id>]',
     })
     return 2
   }
@@ -681,9 +684,10 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   }
   const cfg = loadRemoteConfig()
   try {
-    const opts: { subject?: string; html?: string } = {}
+    const opts: { subject?: string; html?: string; from?: string } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
+    if (fromOverride != null) opts.from = fromOverride
     // text may be omitted for an HTML-only send; the server/adapter derives a
     // plaintext alternative from the HTML in that case.
     const { status, json } = await remoteSend(cfg, target, channel, text ?? '', opts)

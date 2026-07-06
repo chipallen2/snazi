@@ -151,12 +151,13 @@ export async function remoteSend(
   recipient: string,
   channel: string,
   text: string,
-  opts?: { subject?: string; html?: string }
+  opts?: { subject?: string; html?: string; from?: string }
 ): Promise<{ status: number; json: unknown }> {
   const { url, token } = remoteBase(cfg)
   const body: Record<string, unknown> = { recipient, channel, text }
   if (opts?.subject) body.subject = opts.subject
   if (opts?.html) body.html = opts.html
+  if (opts?.from) body.from = opts.from
   return postJson(url, token, '/send', body)
 }
 

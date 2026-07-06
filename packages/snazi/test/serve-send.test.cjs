@@ -110,6 +110,22 @@ async function main() {
   check(/Content-Type: text\/plain/.test(raw) && !/multipart/.test(raw), 'plain send stays text/plain (no multipart)')
   check(/Subject: Hey/.test(raw), 'plain send parses Subject: line')
 
+  // --- from-override (send-as alias) threads through /send ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'gmail-chip',
+      recipient: 'carol@example.com',
+      text: 'Subject: Hey\n\nplain body',
+      from: 'thetman66@gmail.com',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'from-override send -> 200 ok')
+  raw = gmailRaw()
+  check(/From: thetman66@gmail.com/.test(raw), 'from-override sets From header via /send')
+
   // --- html send -> multipart/alternative ---
   installFetch()
   r = await req(serve, {

@@ -254,6 +254,19 @@ function parseHtml(v: string | null): string | undefined {
   return v
 }
 
+/**
+ * Parse an optional From-override address (email send-as alias). Returns
+ * undefined when absent. Reuses the recipient rules (address shape + length).
+ */
+function parseFrom(v: string | null): string | undefined {
+  if (v == null || v === '') return undefined
+  const raw = v.trim()
+  if (!raw) return undefined
+  if (raw.length > MAX_SENDER_LEN) throw new Error('From too long.')
+  if (!SENDER_RE.test(raw)) throw new Error('Invalid from.')
+  return validateRecipientAddress(raw)
+}
+
 /** Parse an optional email subject. Returns undefined when absent. */
 function parseSubject(v: string | null): string | undefined {
   if (v == null) return undefined
@@ -487,11 +500,13 @@ async function handleSend(
     text?: unknown
     subject?: unknown
     html?: unknown
+    from?: unknown
   }
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
   const html = parseHtml(typeof b.html === 'string' ? b.html : null)
   const subject = parseSubject(typeof b.subject === 'string' ? b.subject : null)
+  const from = parseFrom(typeof b.from === 'string' ? b.from : null)
   // `text` is required for a plain send, but optional when `html` is provided
   // (the adapter derives a plaintext alternative). Always pass a plaintext
   // string so non-email channels still have something to send.
@@ -503,8 +518,8 @@ async function handleSend(
   }
   try {
     const opts =
-      html || subject
-        ? { ...(html ? { html } : {}), ...(subject ? { subject } : {}) }
+      html || subject || from
+        ? { ...(html ? { html } : {}), ...(subject ? { subject } : {}), ...(from ? { from } : {}) }
         : undefined
     await adapter.sendMessage(ctx, recipient, text, opts)
     return { status: 200, body: { ok: true, channel, recipient } }

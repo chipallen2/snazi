@@ -400,6 +400,8 @@ export const outlookAdapter: ChannelAdapter = {
     opts?: SendOptions
   ): Promise<void> {
     const accessToken = await token(ctx)
+    // A verified send-as alias may override the From address.
+    const fromAddr = opts?.from ?? ctx.auth.user
     // Explicit subject wins; otherwise fall back to a `Subject:` line in text.
     const parsed = splitSubject(text)
     const subject = opts?.subject ?? parsed.subject
@@ -417,7 +419,7 @@ export const outlookAdapter: ChannelAdapter = {
           subject,
           body: bodyPayload,
           toRecipients: [{ emailAddress: { address: recipient } }],
-          ...(ctx.auth.user ? { from: { emailAddress: { address: ctx.auth.user } } } : {}),
+          ...(fromAddr ? { from: { emailAddress: { address: fromAddr } } } : {}),
         },
         saveToSentItems: true,
       }),

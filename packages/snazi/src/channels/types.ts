@@ -111,6 +111,13 @@ export interface SendOptions {
   subject?: string
   /** HTML body. When set, email channels send an HTML message. */
   html?: string
+  /**
+   * Override the From address (email channels only). Requires the sending
+   * account to have this address configured as a verified "send mail as"
+   * alias; otherwise the provider rejects or rewrites it. When omitted, the
+   * account's own address (ctx.auth.user) is used.
+   */
+  from?: string
 }
 
 export interface ChannelContext {
