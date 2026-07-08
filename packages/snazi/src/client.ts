@@ -304,6 +304,50 @@ export async function remoteFilterDelete(
   return deleteJson(url, token, q)
 }
 
+/** A provider-neutral calendar-event spec passed to the serve host. */
+export interface RemoteCalendarEventSpec {
+  /** Calendar id OR case-insensitive name (resolved server-side). */
+  calendar: string
+  subject: string
+  /** All-day: "YYYY-MM-DD". Timed: ISO datetime. */
+  start: string
+  /** Optional INCLUSIVE last day (all-day) or ISO end datetime (timed). */
+  end?: string
+  allDay?: boolean
+  timeZone?: string
+}
+
+/** List calendars via the remote serve GET /calendar/list. */
+export async function remoteCalendarList(
+  cfg: Config,
+  channel: string
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  return getJson(url, token, `/calendar/list?channel=${encodeURIComponent(channel)}`)
+}
+
+/**
+ * Create a calendar event via the remote serve POST /calendar/create.
+ * NEVER gated — calendar writes are fully open.
+ */
+export async function remoteCalendarCreate(
+  cfg: Config,
+  channel: string,
+  spec: RemoteCalendarEventSpec
+): Promise<{ status: number; json: unknown }> {
+  const { url, token } = remoteBase(cfg)
+  const body: Record<string, unknown> = {
+    channel,
+    calendar: spec.calendar,
+    subject: spec.subject,
+    start: spec.start,
+    allDay: spec.allDay === true,
+  }
+  if (spec.end) body.end = spec.end
+  if (spec.timeZone) body.timeZone = spec.timeZone
+  return postJson(url, token, '/calendar/create', body)
+}
+
 /** Connectivity probe against a remote serve `/health`. */
 export async function remoteHealth(
   cfg: Config

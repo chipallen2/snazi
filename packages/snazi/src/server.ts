@@ -35,7 +35,9 @@ import {
   resolveSendableAdapter,
   resolveActionableAdapter,
   resolveFilterAdapter,
+  resolveCalendarAdapter,
   type FilterSpec,
+  type CalendarEventSpec,
 } from './channels'
 import { normalizeAddress, validateRecipientAddress } from './address'
 import { MAX_MESSAGE_LEN } from './imessage-send'
@@ -805,6 +807,139 @@ async function handleAction(
 }
 
 // ---------------------------------------------------------------------------
+// Calendar endpoints (OPEN / UNGATED — unlike Schwab, calendar writes need no
+// approval link. Chip: "Everything is open for calendars. No gating.")
+// ---------------------------------------------------------------------------
+
+const MAX_CAL_FIELD_LEN = 512
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+// ISO datetime (date-only OR full datetime); we don't fully validate offsets,
+// just shape + control chars. The adapter/provider does the final validation.
+const ISO_DT_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/
+
+/** Parse a required short calendar string field (subject/calendar id/name). */
+function parseCalField(v: unknown, name: string, required: boolean): string | undefined {
+  if (v == null || v === '') {
+    if (required) throw new Error(`${name} is required.`)
+    return undefined
+  }
+  const raw = String(v).trim()
+  if (!raw) {
+    if (required) throw new Error(`${name} is required.`)
+    return undefined
+  }
+  if (raw.length > MAX_CAL_FIELD_LEN) throw new Error(`${name} too long.`)
+  if (TEXT_CTRL_RE.test(raw)) throw new Error(`Invalid ${name}.`)
+  return raw
+}
+
+/** Parse a date/datetime field (all-day => date-only enforced upstream). */
+function parseCalDate(v: unknown, name: string, required: boolean): string | undefined {
+  const raw = parseCalField(v, name, required)
+  if (raw == null) return undefined
+  if (!ISO_DT_RE.test(raw)) {
+    throw new Error(`Invalid ${name}: use YYYY-MM-DD (all-day) or an ISO datetime.`)
+  }
+  return raw
+}
+
+/**
+ * GET /calendar/list?channel=... — list calendars (id + name). Ungated.
+ */
+async function handleCalendarList(
+  cfg: Config,
+  url: URL
+): Promise<{ status: number; body: unknown }> {
+  const channel = parseChannel(url.searchParams.get('channel'))
+  const { adapter, ctx, error } = resolveCalendarAdapter(channel, cfg)
+  if (!adapter?.listCalendars || !ctx) return { status: 501, body: { error } }
+  try {
+    const calendars = await adapter.listCalendars(ctx)
+    return { status: 200, body: { channel, count: calendars.length, calendars } }
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+}
+
+/**
+ * POST /calendar/create  body: { channel, calendar, subject, start, end?,
+ *   allDay?, timeZone? }
+ * `calendar` may be a calendar id OR a case-insensitive name (resolved against
+ * the account's calendar list). Creates the event. NEVER gated.
+ */
+async function handleCalendarCreate(
+  cfg: Config,
+  rawBody: string
+): Promise<{ status: number; body: unknown }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawBody || '{}')
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } }
+  }
+  const b = (parsed ?? {}) as Record<string, unknown>
+  const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
+  let calendar: string
+  let subject: string
+  let start: string
+  let end: string | undefined
+  const allDay = b.allDay === true || b.allDay === 'true'
+  let timeZone: string | undefined
+  try {
+    calendar = parseCalField(b.calendar, 'calendar', true) as string
+    subject = parseCalField(b.subject, 'subject', true) as string
+    start = parseCalDate(b.start, 'start', true) as string
+    end = parseCalDate(b.end, 'end', false)
+    timeZone = parseCalField(b.timeZone, 'timeZone', false)
+    if (allDay && !DATE_ONLY_RE.test(start.slice(0, 10))) {
+      throw new Error('All-day start must be a YYYY-MM-DD date.')
+    }
+  } catch (e) {
+    return { status: 400, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+  const { adapter, ctx, error } = resolveCalendarAdapter(channel, cfg)
+  if (!adapter?.createCalendarEvent || !adapter.listCalendars || !ctx) {
+    return { status: 501, body: { error } }
+  }
+  try {
+    // Resolve a calendar NAME to its id (exact id passes through untouched).
+    let calendarId = calendar
+    const calendars = await adapter.listCalendars(ctx)
+    const byId = calendars.find((c) => c.id === calendar)
+    if (!byId) {
+      const needle = calendar.toLowerCase()
+      const byName = calendars.filter((c) => c.name.toLowerCase() === needle)
+      if (byName.length === 1) {
+        calendarId = byName[0].id
+      } else if (byName.length > 1) {
+        return {
+          status: 409,
+          body: {
+            error: `Multiple calendars named '${calendar}'. Pass a calendar id instead.`,
+            calendars: byName,
+          },
+        }
+      } else {
+        return {
+          status: 404,
+          body: {
+            error: `No calendar matches '${calendar}'. Use /calendar/list to see available calendars.`,
+            available: calendars.map((c) => c.name),
+          },
+        }
+      }
+    }
+    const spec: CalendarEventSpec = { calendarId, subject, start, allDay }
+    if (end) spec.end = end
+    if (timeZone) spec.timeZone = timeZone
+    const event = await adapter.createCalendarEvent(ctx, spec)
+    return { status: 200, body: { ok: true, channel, event } }
+  } catch (e) {
+    return { status: 502, body: { error: String(e instanceof Error ? e.message : e) } }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Schwab capability endpoints
 // ---------------------------------------------------------------------------
 
@@ -1034,6 +1169,10 @@ export function createServer(cfg: Config): http.Server {
             const r = await handleFilterCreate(cfg, rawBody)
             return sendJson(res, r.status, r.body)
           }
+          if (pathname === '/calendar/create') {
+            const r = await handleCalendarCreate(cfg, rawBody)
+            return sendJson(res, r.status, r.body)
+          }
           if (pathname === '/schwab/action') {
             const r = await handleSchwabAction(cfg, rawBody)
             return sendJson(res, r.status, r.body)
@@ -1089,6 +1228,10 @@ export function createServer(cfg: Config): http.Server {
           }
           case '/filter/get': {
             const r = await handleFilterGet(cfg, url)
+            return sendJson(res, r.status, r.body)
+          }
+          case '/calendar/list': {
+            const r = await handleCalendarList(cfg, url)
             return sendJson(res, r.status, r.body)
           }
           default:
@@ -1150,6 +1293,8 @@ export async function startServer(
         'GET /filter/get',
         'PATCH /filter/update',
         'DELETE /filter/delete',
+        'GET /calendar/list',
+        'POST /calendar/create',
         'GET /schwab/accounts',
         'GET /schwab/transactions',
         'POST /schwab/action',

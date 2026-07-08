@@ -145,6 +145,59 @@ export interface ChannelContext {
   auth: ChannelAuth
 }
 
+/** One calendar available on a channel instance (e.g. a named Outlook calendar). */
+export interface CalendarInfo {
+  /** Adapter-native calendar id (Graph calendar id). */
+  id: string
+  /** Human display name, e.g. "Calendar", "Vacation". */
+  name: string
+  /** True if this is the account's default calendar. */
+  isDefault?: boolean
+}
+
+/**
+ * Provider-neutral request to create a calendar event. Adapters translate this
+ * to their native shape and own any all-day date-math quirks internally (e.g.
+ * Microsoft Graph requires an EXCLUSIVE end date for all-day events — the
+ * caller always supplies an INCLUSIVE last day here; the adapter adds the
+ * day-after conversion itself).
+ */
+export interface CalendarEventSpec {
+  /** Adapter-native calendar id to create the event on (resolved from a name upstream). */
+  calendarId: string
+  /** Event title. */
+  subject: string
+  /**
+   * Start. For an all-day event: date-only "YYYY-MM-DD". For a timed event:
+   * a full ISO 8601 datetime.
+   */
+  start: string
+  /**
+   * End (INCLUSIVE last day for all-day events). Optional — defaults to
+   * `start` (a single day / instant). For a timed event: a full ISO 8601
+   * datetime.
+   */
+  end?: string
+  /** True for an all-day event (or multi-day all-day range); false for timed. */
+  allDay: boolean
+  /** IANA timezone for a timed event, or the timezone Graph stores an all-day event under. Defaults to 'UTC'. */
+  timeZone?: string
+}
+
+/** A created calendar event, provider-neutral on the outside. */
+export interface CalendarEventRecord {
+  /** Adapter-native event id. */
+  id: string
+  subject: string
+  /** Adapter-native start dateTime actually sent to the provider. */
+  start: string
+  /** Adapter-native end dateTime actually sent to the provider (exclusive day-after for all-day). */
+  end: string
+  allDay: boolean
+  /** Provider-native created object. */
+  raw: unknown
+}
+
 export interface ChannelAdapter {
   /** Stable TYPE id used in config + the server registry (e.g. 'imessage'). */
   id: string
@@ -216,4 +269,19 @@ export interface ChannelAdapter {
   updateFilter?(ctx: ChannelContext, id: string, spec: FilterSpec): Promise<FilterRecord>
   /** Delete a filter/rule by adapter-native id. Throws on failure. */
   deleteFilter?(ctx: ChannelContext, id: string): Promise<void>
+  /**
+   * Can this channel instance manage CALENDAR events on THIS machine?
+   * Omit when the channel has no calendar API (e.g. iMessage).
+   */
+  calendarAvailability?(ctx?: ChannelContext): ChannelAvailability
+  /** List calendars (id + name) available on this instance. Throws on failure. */
+  listCalendars?(ctx: ChannelContext): Promise<CalendarInfo[]>
+  /**
+   * Create a calendar event. NEVER gated — calendar writes are fully open,
+   * unlike capability adapters such as Schwab. Throws on failure.
+   */
+  createCalendarEvent?(
+    ctx: ChannelContext,
+    spec: CalendarEventSpec
+  ): Promise<CalendarEventRecord>
 }

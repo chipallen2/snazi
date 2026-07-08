@@ -122,6 +122,8 @@ snazi init && snazi doctor
 | `snazi remote-send <recipient> --text <message> [--channel <id>]` | Send a message via the messages machine — never gated. |
 | `snazi remote-resolve [<name>] --channel <id>` | Resolve a name → sender address(es). Empty name = full address book. |
 | `snazi remote-label <sender> --name <name> --channel <id>` | Set a sender's display label (UPDATE-only; cannot open the gate). |
+| `snazi remote-filter <create\|list\|get\|update\|delete> --channel <id> [flags]` | Manage Gmail filters / Outlook rules on the messages machine. **Never gated.** `update` is Outlook-only (Gmail: delete + recreate). |
+| `snazi remote-calendar <list\|create> --channel <id> [flags]` | Manage calendar events on the messages machine (Outlook today). **OPEN/UNGATED — no approval link, unlike Schwab.** See **Calendar events** below. |
 
 All output is JSON. Approval status is cached on disk for a short TTL (default 5
 min; set `checkCacheTtlMs` in config or `SNAZI_CHECK_CACHE_TTL_MS`). Pass
@@ -395,10 +397,20 @@ machine gets least privilege.
 | `POST /send` body `{ recipient, channel, text, subject?, html?, from? }` | bearer | Send an outbound message. **Never gated** — you can always send to anyone. `subject` sets the email subject; `html` sends an HTML email (Gmail multipart/alternative, Outlook contentType HTML) with `text` as the plaintext alternative (auto-derived from `html` when omitted); `from` overrides the From address (email channels only, requires a verified send-as alias on the account). Body cap 512 KiB. Returns `{ ok: true, channel, recipient }` on success. |
 | `GET /resolve?name=<q>&channel=imessage` | bearer | `{ channel, query, matches: [{ sender_address, label, status, contact_name }] }`. Empty/omitted `name` returns every labelled sender. **Never message text.** |
 | `POST /label` body `{ sender, channel, name }` | bearer | Set a sender's display label via an UPDATE-only web endpoint. **Cannot create a row or change `status`**, so it cannot open the gate. 404 if the sender is not on the list yet. |
+| `POST /action` body `{ sender?, messageId?, channel, action, sinceMinutes? }` | bearer | Perform `archive\|delete\|markRead\|markUnread` on one message (`messageId`) or every message from a sender in a window. **Never gated.** |
+| `POST /filter/create` body `{ channel, from?, to?, subject?, query?, action?, labelId?, forwardTo?, folderId?, name?, criteria?, actions? }` | bearer | Create a Gmail filter / Outlook rule. **Never gated.** |
+| `GET /filter/list?channel=<id>` / `GET /filter/get?channel=<id>&id=<id>` | bearer | List / get filters or rules. |
+| `PATCH /filter/update?channel=<id>&id=<id>` | bearer | Update a rule in place. **Outlook only** — Gmail has no update API, returns `405` (delete + recreate). |
+| `DELETE /filter/delete?channel=<id>&id=<id>` | bearer | Delete a filter/rule. |
+| `GET /calendar/list?channel=<id>` | bearer | `{ channel, count, calendars: [{ id, name, isDefault? }] }` — calendars available on this account (Outlook today). |
+| `POST /calendar/create` body `{ channel, calendar, subject, start, end?, allDay?, timeZone? }` | bearer | Create a calendar event. `calendar` may be an id **or a case-insensitive name** (resolved against `/calendar/list`; ambiguous name → `409`, unknown name → `404`). **Never gated — fully open, unlike Schwab.** See **Calendar events** below for the all-day date rules. |
 
 There is **no `approve`/`deny` over HTTP**. Approvals stay dashboard/`/decide`-only.
-`POST /label` is the only write — label metadata only. Unknown path → `404`. Bad
-params → `400`. Unsupported methods → `405`.
+`POST /label` is the only write that can touch the approval list's display
+metadata (never `status`). Filter, action, and calendar writes are real
+mutations on the underlying provider (Gmail/Outlook) but are **never gated by
+the approval list** — the soup nazi only blocks *reading* messages. Unknown
+path → `404`. Bad params → `400`. Unsupported methods → `405`.
 
 ### `contact_name` — local macOS Contacts enrichment (display only)
 

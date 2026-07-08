@@ -189,7 +189,41 @@ export function resolveActionableAdapter(
   return { adapter, ctx }
 }
 
+/**
+ * Resolve a channel id to an adapter that can manage CALENDAR events on this
+ * host. Never throws. Calendar management is NEVER gated by the approval
+ * list — unlike Schwab-style capability actions, calendar writes are fully
+ * open (Chip: "Everything is open for calendars. No gating.").
+ * Requires the adapter to expose at least `listCalendars` + `createCalendarEvent`.
+ */
+export function resolveCalendarAdapter(
+  channel: string,
+  cfg?: Pick<Config, 'channels'>
+): ResolvedAdapter {
+  const ctx = buildContext(channel, cfg)
+  const adapter = getAdapter(ctx.type)
+  if (!adapter) {
+    return { error: unknownChannelError(channel) }
+  }
+  if (!adapter.listCalendars || !adapter.createCalendarEvent) {
+    return { error: `Channel '${channel}' does not support calendar events.` }
+  }
+  const availability = adapter.calendarAvailability?.(ctx) ?? adapter.availability(ctx)
+  if (!availability.available) {
+    const detail = availability.detail ? ` ${availability.detail}` : ''
+    return {
+      error: `Channel '${channel}' is not available on this machine: ${
+        availability.reason ?? 'unavailable'
+      }.${detail}`,
+    }
+  }
+  return { adapter, ctx }
+}
+
 export type {
+  CalendarEventRecord,
+  CalendarEventSpec,
+  CalendarInfo,
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,

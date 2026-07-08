@@ -14,6 +14,9 @@
  * The refresh token needs offline_access + Mail.Read + Mail.Send.
  */
 import type {
+  CalendarEventRecord,
+  CalendarEventSpec,
+  CalendarInfo,
   ChannelAdapter,
   ChannelAvailability,
   ChannelContext,
@@ -306,6 +309,88 @@ function rowFrom(m: GraphMessage, incoming: boolean): MessageRow {
   }
 }
 
+interface GraphCalendar {
+  id?: string
+  name?: string
+  isDefaultCalendar?: boolean
+}
+
+interface GraphDateTimeTz {
+  dateTime?: string
+  timeZone?: string
+}
+
+interface GraphEvent {
+  id?: string
+  subject?: string
+  isAllDay?: boolean
+  start?: GraphDateTimeTz
+  end?: GraphDateTimeTz
+}
+
+const DEFAULT_EVENT_TZ = 'UTC'
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** Add `days` calendar days to a "YYYY-MM-DD" string (UTC-safe, no local TZ drift). */
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map((n) => parseInt(n, 10))
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  const yy = dt.getUTCFullYear()
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+/**
+ * Build the Graph start/end dateTime pair for an event.
+ *
+ * All-day quirk: Graph requires `isAllDay:true` events to carry date-only
+ * dateTime values (midnight, matching timeZone on both ends) AND the `end`
+ * date must be the day AFTER the last inclusive day — a single-day all-day
+ * event from 2026-07-20 to 2026-07-20 (inclusive) must be submitted as
+ * start=2026-07-20T00:00:00 / end=2026-07-21T00:00:00, or Graph creates a
+ * ZERO-length (invisible) event. This function owns that conversion so
+ * callers always pass the INCLUSIVE last day.
+ */
+function buildGraphEventTimes(spec: CalendarEventSpec): {
+  start: GraphDateTimeTz
+  end: GraphDateTimeTz
+} {
+  const tz = spec.timeZone?.trim() || DEFAULT_EVENT_TZ
+  if (spec.allDay) {
+    const startDate = spec.start.slice(0, 10)
+    if (!DATE_ONLY_RE.test(startDate)) {
+      throw new Error(`Invalid all-day start date '${spec.start}'. Use YYYY-MM-DD.`)
+    }
+    const inclusiveEndDate = (spec.end?.slice(0, 10) || startDate)
+    if (!DATE_ONLY_RE.test(inclusiveEndDate)) {
+      throw new Error(`Invalid all-day end date '${spec.end}'. Use YYYY-MM-DD.`)
+    }
+    // Graph wants the EXCLUSIVE end (day after the last inclusive day).
+    const exclusiveEndDate = addDaysToDateStr(inclusiveEndDate, 1)
+    return {
+      start: { dateTime: `${startDate}T00:00:00`, timeZone: tz },
+      end: { dateTime: `${exclusiveEndDate}T00:00:00`, timeZone: tz },
+    }
+  }
+  // Timed event: pass the caller's ISO datetimes through as-is.
+  const start = spec.start
+  const end = spec.end || spec.start
+  return {
+    start: { dateTime: start, timeZone: tz },
+    end: { dateTime: end, timeZone: tz },
+  }
+}
+
+function toCalendarInfo(c: GraphCalendar): CalendarInfo {
+  return {
+    id: c.id ?? '',
+    name: c.name ?? '(unnamed)',
+    ...(c.isDefaultCalendar ? { isDefault: true } : {}),
+  }
+}
+
 export const outlookAdapter: ChannelAdapter = {
   id: 'outlook',
   displayName: 'Outlook',
@@ -570,5 +655,58 @@ export const outlookAdapter: ChannelAdapter = {
     }
 
     throw new Error('performMessageAction requires either sender or messageId.')
+  },
+
+  calendarAvailability(ctx?: ChannelContext): ChannelAvailability {
+    return oauthAvailability(ctx, LABEL)
+  },
+
+  /**
+   * List calendars available on this account (GET /me/calendars). Used to
+   * resolve a human calendar name (e.g. "Vacation") to its Graph id before
+   * creating an event on it.
+   */
+  async listCalendars(ctx: ChannelContext): Promise<CalendarInfo[]> {
+    const accessToken = await token(ctx)
+    const url = graphUrl('/me/calendars', {
+      $select: 'id,name,isDefaultCalendar',
+      $top: '100',
+    })
+    const res = await graphGet<{ value?: GraphCalendar[] }>(accessToken, url)
+    return (res.value ?? []).map(toCalendarInfo)
+  },
+
+  /**
+   * Create a calendar event (POST /me/calendars/{id}/events). NEVER gated —
+   * calendar writes are fully open (unlike Schwab-style capability actions).
+   * Handles the Graph all-day exclusive-end-date quirk internally; callers
+   * always pass the INCLUSIVE last day.
+   */
+  async createCalendarEvent(
+    ctx: ChannelContext,
+    spec: CalendarEventSpec
+  ): Promise<CalendarEventRecord> {
+    const accessToken = await token(ctx)
+    const { start, end } = buildGraphEventTimes(spec)
+    const enc = encodeURIComponent(spec.calendarId)
+    const body = {
+      subject: spec.subject,
+      isAllDay: spec.allDay,
+      start,
+      end,
+    }
+    const created = await graphPost<GraphEvent>(
+      accessToken,
+      `${GRAPH}/me/calendars/${enc}/events`,
+      body
+    )
+    return {
+      id: created.id ?? '',
+      subject: created.subject ?? spec.subject,
+      start: created.start?.dateTime ?? start.dateTime ?? '',
+      end: created.end?.dateTime ?? end.dateTime ?? '',
+      allDay: created.isAllDay ?? spec.allDay,
+      raw: created,
+    }
   },
 }

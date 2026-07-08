@@ -57,7 +57,10 @@ import {
   remoteFilterGet,
   remoteFilterUpdate,
   remoteFilterDelete,
+  remoteCalendarList,
+  remoteCalendarCreate,
   type RemoteFilterSpec,
+  type RemoteCalendarEventSpec,
 } from './client'
 import { installDaemon, LABEL } from './daemon'
 import {
@@ -842,6 +845,57 @@ async function cmdRemoteFilter(args: string[]): Promise<number> {
   }
 }
 
+async function cmdRemoteCalendar(args: string[]): Promise<number> {
+  const sub = args[0]
+  const rest = args.slice(1)
+  const channel = flag(rest, '--channel') ?? DEFAULT_CHANNEL
+  const cfg = loadRemoteConfig()
+  const usageErr = () => {
+    out({
+      error:
+        'Usage: snazi remote-calendar <list|create> --channel <id> [flags]\n' +
+        '  list  : (no extra flags) — shows calendar ids + names\n' +
+        '  create: --calendar <name-or-id> --subject <title> --start <YYYY-MM-DD|ISO>\n' +
+        '          [--end <YYYY-MM-DD|ISO>] [--all-day] [--tz <IANA>]\n' +
+        '          all-day --end is the INCLUSIVE last day (Graph day-after handled for you).',
+    })
+    return 2
+  }
+  try {
+    if (sub === 'list') {
+      const { status, json } = await remoteCalendarList(cfg, channel)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    if (sub === 'create') {
+      const calendar = flag(rest, '--calendar')
+      const subject = flag(rest, '--subject')
+      const start = flag(rest, '--start')
+      if (!calendar || !subject || !start) {
+        out({ error: 'create requires --calendar, --subject, and --start.' })
+        return 2
+      }
+      const spec: RemoteCalendarEventSpec = {
+        calendar,
+        subject,
+        start,
+        allDay: hasFlag(rest, '--all-day'),
+      }
+      const end = flag(rest, '--end')
+      const tz = flag(rest, '--tz')
+      if (end) spec.end = end
+      if (tz) spec.timeZone = tz
+      const { status, json } = await remoteCalendarCreate(cfg, channel, spec)
+      out(json)
+      return status >= 200 && status < 300 ? 0 : 1
+    }
+    return usageErr()
+  } catch (e) {
+    out({ error: String(e instanceof Error ? e.message : e) })
+    return 1
+  }
+}
+
 async function cmdRemoteStatus(): Promise<number> {
   const cfg = loadRemoteConfig()
   try {
@@ -943,6 +997,12 @@ Agent machine (set up with 'snazi init-agent'; calls your messages machine's gat
                                                         create: --action <delete|archive|label|markRead|forward> plus a match
                                                         (--from/--to/--subject/--query). get/update/delete take --id. update
                                                         is Outlook-only (Gmail has no update: delete + recreate).
+  snazi remote-calendar <list|create> --channel <id> [flags]
+                                                        Manage calendar events (remote; OPEN/UNGATED — no approval link)
+                                                        list  : show calendar ids + names
+                                                        create: --calendar <name-or-id> --subject <title> --start <YYYY-MM-DD|ISO>
+                                                                [--end <YYYY-MM-DD|ISO>] [--all-day] [--tz <IANA>]
+                                                                all-day --end is the INCLUSIVE last day (Outlook: currently).
 
 The server manages an approve/deny list only. It stores no messages.
 Reading is gated; sending is not. serve binds the tailnet IP (100.x) or
@@ -1013,6 +1073,9 @@ async function main(): Promise<void> {
       break
     case 'remote-filter':
       code = await cmdRemoteFilter(rest)
+      break
+    case 'remote-calendar':
+      code = await cmdRemoteCalendar(rest)
       break
     case 'remote-check':
       code = await cmdRemoteCheck(rest)
