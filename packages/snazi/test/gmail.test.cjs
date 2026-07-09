@@ -80,6 +80,31 @@ function fullMsg(id, from, subject, body, internalDate) {
   }
 }
 
+// A full-format original message (forward source): plain body + Date/To
+// headers + one real attachment part (has attachmentId, no inline data).
+function origForwardMsg(id, subject) {
+  return {
+    id,
+    payload: {
+      mimeType: 'multipart/mixed',
+      headers: [
+        { name: 'From', value: 'Rebecca <rebeccac@newmanwindows.com>' },
+        { name: 'Date', value: 'Wed, 08 Jul 2026 10:00:00 -0700' },
+        { name: 'Subject', value: subject },
+        { name: 'To', value: 'chip@gmail.com' },
+      ],
+      parts: [
+        { mimeType: 'text/plain', body: { data: b64url('Here is the original message body.') } },
+        {
+          mimeType: 'application/pdf',
+          filename: 'quote.pdf',
+          body: { attachmentId: 'ATT-1', size: 1234 },
+        },
+      ],
+    },
+  }
+}
+
 const ctx = {
   id: 'gmail-work',
   type: 'gmail',
@@ -126,6 +151,16 @@ function installFetch() {
       if (u.includes('format=full')) {
         if (id === 'r1')
           return resp(fullMsg('r1', 'alice@example.com', 'Hi there', 'hello world', '1500'))
+        // Forward originals: one plain subject, one already-"Fwd:" subject.
+        if (id === 'fwd-1') return resp(origForwardMsg('fwd-1', 'Window quote'))
+        if (id === 'fwd-2') return resp(origForwardMsg('fwd-2', 'Fwd: Already forwarded'))
+      }
+      // Attachment bytes fetch: /messages/<id>/attachments/<attachmentId>
+      const am = u.match(/\/messages\/([^/]+)\/attachments\/([^?]+)/)
+      if (am) {
+        const [, , attId] = am
+        if (attId === 'ATT-1') return resp({ data: b64url('PDF-BYTES-HERE'), size: 14 })
+        return resp({ error: 'not found' }, false, 404)
       }
     }
     return resp({ error: `unexpected url ${u}` }, false, 500)
@@ -293,6 +328,75 @@ async function main() {
   check(/eve@example\.com/.test(ccLine), 'reply-all CCs a non-owner from original Cc')
   check(!/chip@gmail\.com/.test(ccLine), 'reply-all excludes our own (from) address from Cc')
   check(!/alice@example\.com/.test(ccLine), 'reply-all excludes the primary recipient from Cc')
+
+  // --- sendMessage: REAL forward (Fwd: subject + quoted original + attachment) ---
+  installFetch()
+  clearTokenCache()
+  await gmailAdapter.sendMessage(ctx, 'hannah@example.com', 'FYI, looping you in', {
+    forwardMessageId: 'fwd-1',
+  })
+  const fwdSend = calls.find((c) => c.url.endsWith('/messages/send'))
+  check(Boolean(fwdSend), 'forward POSTs to /messages/send')
+  const fwdParsed = JSON.parse(fwdSend.init.body)
+  check(fwdParsed.threadId === undefined, 'forward does NOT set threadId (new thread, unlike reply)')
+  const fwdRaw = Buffer.from(fwdParsed.raw, 'base64url').toString('utf8')
+  check(/Subject: Fwd: Window quote/.test(fwdRaw), 'forward subject gets a single Fwd: prefix')
+  check(/To: hannah@example\.com/.test(fwdRaw), 'forward To is the caller-supplied recipient')
+  check(
+    /multipart\/mixed/.test(fwdRaw),
+    'forward with an attachment is multipart/mixed'
+  )
+  // The text/plain part is base64-encoded (mixed messages must properly
+  // encode every part), so decode it before checking the comment/quote body.
+  const fwdTextB64 = fwdRaw
+    .split(/--=_snazi_fwd_[^\r\n]+/)
+    .find((seg) => /text\/plain/.test(seg))
+    .split(/\r?\n\r?\n/)[1]
+    .replace(/\r?\n/g, '')
+  const fwdText = Buffer.from(fwdTextB64, 'base64').toString('utf8')
+  check(/FYI, looping you in/.test(fwdText), 'forward carries the caller comment')
+  check(
+    /---------- Forwarded message ---------/.test(fwdText),
+    'forward includes the standard forwarded-header block'
+  )
+  check(
+    /From: Rebecca <rebeccac@newmanwindows\.com>/.test(fwdText),
+    'forwarded-header block includes the original From'
+  )
+  check(/Subject: Window quote/.test(fwdText), 'forwarded-header block includes the original Subject')
+  check(
+    /Here is the original message body\./.test(fwdText),
+    'forward includes the original message body'
+  )
+  check(
+    /Content-Disposition: attachment; filename="quote\.pdf"/.test(fwdRaw),
+    'forward re-attaches the original attachment with its filename'
+  )
+  const fwdAttB64 = fwdRaw
+    .split(/--=_snazi_fwd_[^\r\n]+/)
+    .find((seg) => /application\/pdf/.test(seg))
+    .split(/\r?\n\r?\n/)[1]
+    .replace(/\r?\n/g, '')
+  check(
+    Buffer.from(fwdAttB64, 'base64').toString('utf8') === 'PDF-BYTES-HERE',
+    'forwarded attachment bytes decode back to the original content'
+  )
+
+  // --- forward must NOT double-prefix an already-"Fwd:" subject ---
+  installFetch()
+  await gmailAdapter.sendMessage(ctx, 'hannah@example.com', '', { forwardMessageId: 'fwd-2' })
+  const fwd2Raw = Buffer.from(
+    JSON.parse(calls.find((c) => c.url.endsWith('/messages/send')).init.body).raw,
+    'base64url'
+  ).toString('utf8')
+  check(/Subject: Fwd: Already forwarded/.test(fwd2Raw), 'already-Fwd: subject kept as-is')
+  check(!/Fwd: Fwd:/.test(fwd2Raw), 'no double Fwd: Fwd: prefix')
+
+  // --- forward with no comment still works (empty comment above the quote) ---
+  installFetch()
+  await gmailAdapter.sendMessage(ctx, 'hannah@example.com', '', { forwardMessageId: 'fwd-1' })
+  const fwd3Send = calls.find((c) => c.url.endsWith('/messages/send'))
+  check(Boolean(fwd3Send), 'forward with empty comment still sends')
 
   // --- error surfacing ---
   globalThis.fetch = async () => resp({ error: 'boom' }, false, 502)

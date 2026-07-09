@@ -503,6 +503,21 @@ export const outlookAdapter: ChannelAdapter = {
       return
     }
 
+    // Forward path: Microsoft Graph has a NATIVE /forward endpoint that keeps
+    // the original message + its attachments intact, so (unlike Gmail) we
+    // don't reconstruct any MIME ourselves. `comment` is the caller's optional
+    // note, shown above the forwarded original in the recipient's client.
+    // Same From-override limitation as reply: Graph's /forward doesn't accept
+    // a from override, so `--from` is ignored on a forward too.
+    if (opts?.forwardMessageId) {
+      const enc = encodeURIComponent(opts.forwardMessageId)
+      await graphPost(accessToken, `${GRAPH}/me/messages/${enc}/forward`, {
+        comment: opts.html ?? text ?? '',
+        toRecipients: [{ emailAddress: { address: recipient } }],
+      })
+      return
+    }
+
     // A verified send-as alias may override the From address.
     const fromAddr = opts?.from ?? ctx.auth.user
     // Explicit subject wins; otherwise fall back to a `Subject:` line in text.

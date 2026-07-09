@@ -54,6 +54,28 @@ function installFetch() {
         },
       })
     }
+    // Gmail: fetch the original full message for a forward (no attachments
+    // in this fixture; keeps the serve-level test focused on passthrough).
+    if (/\/messages\/fwd-orig-1\?/.test(u) && u.includes('format=full')) {
+      return resp({
+        id: 'fwd-orig-1',
+        payload: {
+          mimeType: 'text/plain',
+          headers: [
+            { name: 'From', value: 'Rebecca <rebeccac@newmanwindows.com>' },
+            { name: 'Date', value: 'Wed, 08 Jul 2026 10:00:00 -0700' },
+            { name: 'Subject', value: 'Window quote' },
+            { name: 'To', value: 'chip@gmail.com' },
+          ],
+          body: { data: Buffer.from('Original body text.', 'utf8').toString('base64url') },
+        },
+      })
+    }
+    // Outlook native forward endpoint (match before /me/sendMail).
+    if (/\/me\/messages\/[^/]+\/forward$/.test(u)) {
+      sends.push({ provider: 'outlook-forward', body: JSON.parse(init.body) })
+      return resp({}, true, 202)
+    }
     if (u.endsWith('/messages/send')) {
       sends.push({ provider: 'gmail', body: JSON.parse(init.body) })
       return resp({ id: 'sent-1' })
@@ -229,6 +251,67 @@ async function main() {
   check(
     !sends.some((s) => s.provider === 'outlook'),
     'outlook reply does NOT hit send-new (/me/sendMail)'
+  )
+
+  // --- gmail forward threads through /send (forwardMessageId) ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'gmail-chip',
+      recipient: 'hannah@example.com',
+      text: 'FYI, looping you in',
+      forwardMessageId: 'fwd-orig-1',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'gmail forward send -> 200 ok')
+  const gFwd = sends.find((s) => s.provider === 'gmail')
+  check(gFwd.body.threadId === undefined, 'serve /send does NOT set threadId on a gmail forward')
+  const fwdRaw = Buffer.from(gFwd.body.raw, 'base64url').toString('utf8')
+  check(/Subject: Fwd: Window quote/.test(fwdRaw), 'serve /send derives Fwd: subject for gmail forward')
+  check(/To: hannah@example\.com/.test(fwdRaw), 'serve /send forward To is the caller recipient')
+  check(
+    /---------- Forwarded message ---------/.test(fwdRaw),
+    'serve /send forward includes the forwarded-header block'
+  )
+
+  // --- gmail forward with NO --text still sends (comment optional) ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'gmail-chip',
+      recipient: 'hannah@example.com',
+      forwardMessageId: 'fwd-orig-1',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'gmail forward with no --text -> 200 ok (comment optional)')
+
+  // --- outlook forward routes to the native /forward endpoint ---
+  installFetch()
+  r = await req(serve, {
+    path: '/send',
+    token: TOKEN,
+    body: {
+      channel: 'outlook-work',
+      recipient: 'hannah@example.com',
+      text: 'FYI looping you in',
+      forwardMessageId: 'in-9',
+    },
+  })
+  check(r.status === 200 && r.json.ok === true, 'outlook forward send -> 200 ok')
+  const oFwd = sends.find((s) => s.provider === 'outlook-forward')
+  check(Boolean(oFwd), 'serve /send routes outlook forward to native /forward endpoint')
+  check(oFwd.body.comment === 'FYI looping you in', 'serve /send carries outlook forward comment')
+  check(
+    oFwd.body.toRecipients?.[0]?.emailAddress?.address === 'hannah@example.com',
+    'serve /send outlook forward sets toRecipients to the caller recipient'
+  )
+  check(
+    !sends.some((s) => s.provider === 'outlook'),
+    'outlook forward does NOT hit send-new (/me/sendMail)'
   )
 
   // --- missing body (no text, no html) -> 400 ---

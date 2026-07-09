@@ -157,6 +157,7 @@ export async function remoteSend(
     from?: string
     replyToMessageId?: string
     replyAll?: boolean
+    forwardMessageId?: string
   }
 ): Promise<{ status: number; json: unknown }> {
   const { url, token } = remoteBase(cfg)
@@ -166,6 +167,7 @@ export async function remoteSend(
   if (opts?.from) body.from = opts.from
   if (opts?.replyToMessageId) body.replyToMessageId = opts.replyToMessageId
   if (opts?.replyAll) body.replyAll = true
+  if (opts?.forwardMessageId) body.forwardMessageId = opts.forwardMessageId
   return postJson(url, token, '/send', body)
 }
 

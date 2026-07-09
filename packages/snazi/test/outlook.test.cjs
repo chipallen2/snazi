@@ -69,6 +69,10 @@ function installFetch() {
     if (/\/me\/messages\/[^/]+\/reply$/.test(u)) {
       return resp({}, true, 202)
     }
+    // Native forward endpoint (match before the generic /me/messages).
+    if (/\/me\/messages\/[^/]+\/forward$/.test(u)) {
+      return resp({}, true, 202)
+    }
     if (u.includes('/mailFolders/inbox/messages')) {
       return resp({
         value: [
@@ -238,6 +242,51 @@ async function main() {
   check(
     JSON.parse(htmlReply.init.body).comment === '<p>rich reply</p>',
     'reply uses html as comment when provided'
+  )
+
+  // --- sendMessage: native Graph forward endpoint ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'hannah@example.com', 'FYI looping you in', {
+    forwardMessageId: 'in-1',
+  })
+  const forwardCall = calls.find((c) => /\/me\/messages\/in-1\/forward$/.test(c.url))
+  check(
+    Boolean(forwardCall) && forwardCall.init.method === 'POST',
+    'forward POSTs to /me/messages/{id}/forward'
+  )
+  const forwardBody = JSON.parse(forwardCall.init.body)
+  check(forwardBody.comment === 'FYI looping you in', 'forward sends the text as the comment')
+  check(
+    Array.isArray(forwardBody.toRecipients) &&
+      forwardBody.toRecipients[0]?.emailAddress?.address === 'hannah@example.com',
+    'forward sets toRecipients to the caller-supplied recipient'
+  )
+  check(
+    !calls.some((c) => c.url.endsWith('/me/sendMail')),
+    'forward does NOT hit the send-new-message path'
+  )
+
+  // --- sendMessage: forward with html comment and no --text ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'hannah@example.com', '', {
+    forwardMessageId: 'in-1',
+    html: '<p>rich fyi</p>',
+  })
+  const htmlForward = calls.find((c) => /\/me\/messages\/in-1\/forward$/.test(c.url))
+  check(
+    JSON.parse(htmlForward.init.body).comment === '<p>rich fyi</p>',
+    'forward uses html as comment when provided'
+  )
+
+  // --- sendMessage: forward with no comment sends an empty comment ---
+  calls.length = 0
+  await outlookAdapter.sendMessage(ctx, 'hannah@example.com', '', {
+    forwardMessageId: 'in-1',
+  })
+  const emptyForward = calls.find((c) => /\/me\/messages\/in-1\/forward$/.test(c.url))
+  check(
+    Boolean(emptyForward) && JSON.parse(emptyForward.init.body).comment === '',
+    'forward with no text/html sends an empty comment (does not throw)'
   )
 
   if (failures === 0) {

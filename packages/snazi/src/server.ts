@@ -505,6 +505,7 @@ async function handleSend(
     from?: unknown
     replyToMessageId?: unknown
     replyAll?: unknown
+    forwardMessageId?: unknown
   }
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
@@ -513,24 +514,27 @@ async function handleSend(
   const from = parseFrom(typeof b.from === 'string' ? b.from : null)
   const replyToMessageId = parseMessageId(b.replyToMessageId)
   const replyAll = b.replyAll === true
+  const forwardMessageId = parseMessageId(b.forwardMessageId)
   // `text` is required for a plain send, but optional when `html` is provided
-  // (the adapter derives a plaintext alternative). Always pass a plaintext
+  // (the adapter derives a plaintext alternative) or when forwarding (the
+  // adapter fetches the original body itself). Always pass a plaintext
   // string so non-email channels still have something to send.
   const rawText = typeof b.text === 'string' ? b.text : null
-  const text = html ? parseOptionalText(rawText) : parseText(rawText)
+  const text = html || forwardMessageId ? parseOptionalText(rawText) : parseText(rawText)
   const { adapter, ctx, error } = resolveSendableAdapter(channel, cfg)
   if (!adapter?.sendMessage || !ctx) {
     return { status: 501, body: { error } }
   }
   try {
     const opts =
-      html || subject || from || replyToMessageId || replyAll
+      html || subject || from || replyToMessageId || replyAll || forwardMessageId
         ? {
             ...(html ? { html } : {}),
             ...(subject ? { subject } : {}),
             ...(from ? { from } : {}),
             ...(replyToMessageId ? { replyToMessageId } : {}),
             ...(replyAll ? { replyAll: true } : {}),
+            ...(forwardMessageId ? { forwardMessageId } : {}),
           }
         : undefined
     await adapter.sendMessage(ctx, recipient, text, opts)

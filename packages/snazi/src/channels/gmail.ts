@@ -50,7 +50,7 @@ interface GmailHeader {
 interface GmailPart {
   mimeType?: string
   filename?: string
-  body?: { data?: string; size?: number }
+  body?: { data?: string; size?: number; attachmentId?: string }
   parts?: GmailPart[]
 }
 interface GmailMessage {
@@ -464,10 +464,14 @@ export const gmailAdapter: ChannelAdapter = {
     // fall back to the account's own address.
     const from = opts?.from ?? ctx.auth.user
 
+    // Forward path: build a REAL MIME forward (Fwd: subject + quoted original
+    // headers/body + re-attached original attachments), a brand-new thread.
     // Reply path: build RFC 5322 threading headers from the original message
     // and set threadId so Gmail actually threads the reply. Kept SEPARATE from
     // the new-message path below so a plain send stays byte-identical.
-    const sendBody: { raw: string; threadId?: string } = opts?.replyToMessageId
+    const sendBody: { raw: string; threadId?: string } = opts?.forwardMessageId
+      ? await buildForwardBody(accessToken, recipient, from, text, opts)
+      : opts?.replyToMessageId
       ? await buildReplyBody(accessToken, recipient, from, text, opts)
       : {
           raw: opts?.html
@@ -492,6 +496,152 @@ export const gmailAdapter: ChannelAdapter = {
       throw new Error(`Gmail send failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
     }
   },
+}
+
+/**
+ * Add a single `Fwd: ` prefix to a subject, without doubling up when it
+ * already starts with one (case-insensitive). An empty subject becomes `Fwd:`.
+ */
+function forwardSubject(origSubject: string): string {
+  const s = (origSubject ?? '').trim()
+  if (/^fwd:/i.test(s)) return s
+  return s ? `Fwd: ${s}` : 'Fwd:'
+}
+
+/**
+ * Recursively collect real attachment parts (a filename + an attachmentId to
+ * fetch the bytes separately) from a Gmail payload tree, skipping inline
+ * text/html body parts which have `body.data` but no `attachmentId`.
+ */
+function collectAttachmentParts(payload?: GmailPart): GmailPart[] {
+  if (!payload) return []
+  const result: GmailPart[] = []
+  const walk = (p: GmailPart): void => {
+    if (p.filename && p.body?.attachmentId) result.push(p)
+    for (const child of p.parts ?? []) walk(child)
+  }
+  walk(payload)
+  return result
+}
+
+/**
+ * Build the Gmail /messages/send body for a REAL forward: fetches the
+ * original message (headers + body + attachment refs), prefixes the subject
+ * with a single `Fwd:`, renders a standard "Forwarded message" header block
+ * plus the original body below the caller's optional comment, and re-attaches
+ * the original attachments best-effort (fetched individually and re-encoded).
+ * Unlike a reply, a forward starts a brand-new thread — no `threadId` is set.
+ */
+async function buildForwardBody(
+  accessToken: string,
+  recipient: string,
+  from: string | undefined,
+  text: string,
+  opts: SendOptions
+): Promise<{ raw: string; threadId?: string }> {
+  const messageId = opts.forwardMessageId as string
+  const orig = await apiGet<GmailMessage>(accessToken, `/messages/${encodeURIComponent(messageId)}`, {
+    format: 'full',
+  })
+  const origSubject = headerValue(orig, 'Subject')
+  const origFrom = headerValue(orig, 'From')
+  const origDate = headerValue(orig, 'Date')
+  const origTo = headerValue(orig, 'To')
+  const subject = opts.subject ?? forwardSubject(origSubject)
+  const origBody = extractBody(orig.payload)
+
+  const forwardedHeader = [
+    '---------- Forwarded message ---------',
+    origFrom ? `From: ${origFrom}` : '',
+    origDate ? `Date: ${origDate}` : '',
+    origSubject ? `Subject: ${origSubject}` : '',
+    origTo ? `To: ${origTo}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  // The caller's comment (--text) goes above the quoted original. An explicit
+  // --subject means text is the whole comment as-is; otherwise strip a
+  // possible `Subject:` line the same way a plain send would.
+  const comment = (opts.subject != null ? text : splitSubject(text).body).trim()
+  const bodyText = [comment, '', forwardedHeader, '', origBody].join('\n')
+
+  // Best-effort attachment re-attachment: fetch each attachment's bytes and
+  // rebuild them as MIME parts. A single fetch failure drops that one
+  // attachment rather than failing the whole forward.
+  const attachmentSpecs = collectAttachmentParts(orig.payload)
+  const attachments = (
+    await Promise.all(
+      attachmentSpecs.map(async (part) => {
+        const attId = part.body?.attachmentId
+        if (!attId) return null
+        try {
+          const att = await apiGet<{ data?: string; size?: number }>(
+            accessToken,
+            `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}`
+          )
+          if (!att.data) return null
+          const base64 = Buffer.from(att.data, 'base64url').toString('base64')
+          return {
+            filename: part.filename || 'attachment',
+            mimeType: part.mimeType || 'application/octet-stream',
+            base64,
+          }
+        } catch {
+          return null
+        }
+      })
+    )
+  ).filter((a): a is { filename: string; mimeType: string; base64: string } => a !== null)
+
+  const raw =
+    attachments.length > 0
+      ? buildForwardMixedRaw(recipient, from, subject, bodyText, attachments)
+      : buildPlainRaw(recipient, from, subject, bodyText)
+
+  // No threadId: a forward starts a new thread, unlike a reply.
+  return { raw }
+}
+
+/**
+ * Build a multipart/mixed RFC822 forward message: a text/plain part (the
+ * comment + quoted forwarded original) followed by one part per re-attached
+ * original attachment, base64url-encoded for the Gmail API.
+ */
+function buildForwardMixedRaw(
+  recipient: string,
+  from: string | undefined,
+  subject: string,
+  bodyText: string,
+  attachments: { filename: string; mimeType: string; base64: string }[]
+): string {
+  const boundary = `=_snazi_fwd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  const headers = [
+    `To: ${recipient}`,
+    from ? `From: ${from}` : null,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ].filter((l): l is string => l !== null)
+  const lines: string[] = [
+    ...headers,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64Wrapped(bodyText),
+  ]
+  for (const att of attachments) {
+    lines.push(`--${boundary}`)
+    lines.push(`Content-Type: ${att.mimeType}; name="${att.filename}"`)
+    lines.push('Content-Transfer-Encoding: base64')
+    lines.push(`Content-Disposition: attachment; filename="${att.filename}"`)
+    lines.push('')
+    lines.push((att.base64.match(/.{1,76}/g) ?? []).join('\r\n'))
+  }
+  lines.push(`--${boundary}--`)
+  return Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url')
 }
 
 /**

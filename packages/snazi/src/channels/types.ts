@@ -132,6 +132,18 @@ export interface SendOptions {
    * sending account's own address). Ignored unless `replyToMessageId` is set.
    */
   replyAll?: boolean
+  /**
+   * Native id of the message being FORWARDED (email channels only). When set,
+   * the adapter forwards that specific message to `recipient`: Gmail builds a
+   * REAL MIME forward ("Fwd: <subject>" + a quoted forwarded-header block and
+   * the original body, with the original attachments re-attached best-effort)
+   * and does NOT reuse the original threadId (a forward starts a new thread);
+   * Outlook uses Graph's native `/forward` endpoint (original + attachments
+   * preserved by the provider). Any `text` becomes the forwarding comment above
+   * the quoted original. Get this id from a read row's `id` field. Takes
+   * precedence over `replyToMessageId` if both are somehow set.
+   */
+  forwardMessageId?: string
 }
 
 export interface ChannelContext {

@@ -293,6 +293,42 @@ snazi remote-send "alice@example.com" --channel gmail-work \
   that pattern for a genuinely new/unrelated email, never call it a reply.
 - iMessage has no reply concept here; `--reply-to` is ignored on that channel.
 
+### Forward a specific message (real forward, new thread)
+
+Pasting the original text into a brand-new email is NOT a forward - the
+recipient's client shows it as an unrelated message, with no "Fwd:" marker, no
+original headers, and no original attachments. To send a genuine forward of a
+specific message, pass `--forward-msg <messageId>` (the id comes from a
+`remote-read` row, same as `--reply-to`). Any `--text` becomes your forwarding
+comment, shown above the quoted original:
+
+```bash
+# 1) Read the conversation - each message row includes its native id.
+snazi remote-read "rebecca@example.com" --channel gmail-chip --since 10080
+#   -> messages: [ { id: "18f...", direction: "incoming", text: "..." }, ... ]
+
+# 2) Forward that message to someone else, with an optional comment.
+snazi remote-send "hannah@example.com" --channel gmail-chip \
+  --forward-msg "18f..." --text "FYI, looping you in on this."
+```
+
+- **Gmail**: builds a real MIME forward - subject gets a single `Fwd: ` prefix
+  (never doubled), a standard `---------- Forwarded message ---------` header
+  block (From/Date/Subject/To) is included below your comment, followed by the
+  original body. The original attachments are re-attached best-effort (each is
+  fetched individually and re-encoded as a MIME part); if a given attachment
+  fails to fetch, that one attachment is silently dropped rather than failing
+  the whole forward. A forward always starts a **new thread** (no `threadId`
+  is set), unlike a reply.
+- **Outlook**: uses Microsoft Graph's native `/forward` endpoint, which
+  preserves the original message and its attachments automatically - no MIME
+  reconstruction needed. Same known limitation as reply: Graph's `/forward`
+  does not honor a `--from` alias override.
+- Works with `--html-file` / `--html-text` too (the HTML becomes the
+  forwarding comment).
+- iMessage has no forward concept here; `--forward-msg` is ignored on that
+  channel.
+
 ### Credentials live ONLY on the messages machine
 
 OAuth tokens / secrets are written to `~/.snazi/config.json` (created `0600`) and
