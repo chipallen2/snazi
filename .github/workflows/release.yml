@@ -31,6 +31,14 @@ jobs:
       - run: npm install -g npm@latest
 
       - run: npm ci
+
+      # npm >= 11.16 blocks dependency install scripts by default (allowScripts
+      # allowlist; hard-fails in npm 12). better-sqlite3 is a native addon whose
+      # build script is allow-listed in package.json, but rebuild explicitly here
+      # so the .node binary always exists for the test suite regardless of the
+      # exact npm version the runner installs.
+      - run: npm rebuild better-sqlite3
+
       - run: npm test
 
       - name: Verify tag matches package.json version

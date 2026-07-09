@@ -47,6 +47,9 @@
   "optionalDependencies": {
     "better-sqlite3": "^11.3.0"
   },
+  "allowScripts": {
+    "better-sqlite3": true
+  },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.14.0",
