@@ -27,8 +27,11 @@ jobs:
           node-version: '24' # ships npm 11.5.1+, required for OIDC publishing
           registry-url: 'https://registry.npmjs.org'
 
-      # Belt-and-suspenders: guarantee an OIDC-capable npm (>= 11.5.1).
-      - run: npm install -g npm@latest
+      # Pin the global npm to the 11.x line. npm@latest now resolves to 12.0.0,
+      # which (a) has a broken provenance path (missing bundled 'sigstore',
+      # npm/cli#9722) and (b) hard-blocks dependency install scripts by default.
+      # 11.x is OIDC/provenance-capable (>= 11.5.1) and only warns on scripts.
+      - run: npm install -g npm@11
 
       - run: npm ci
 
