@@ -10,7 +10,7 @@ import { getSupabase } from './supabase'
 import { hashPassword, verifyPassword } from './password'
 import type { User } from './types'
 
-const PUBLIC_COLS = 'id,email,read_token,created_at'
+const PUBLIC_COLS = 'id,email,read_token,auto_approve_on_send,created_at'
 
 export function normalizeEmail(email: string): string {
   return String(email ?? '').trim().toLowerCase()

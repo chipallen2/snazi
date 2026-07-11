@@ -1,14 +1,17 @@
 import { redirect } from 'next/navigation'
 import { currentUser } from '@/lib/currentUser'
-import { rotateToken } from './actions'
+import { rotateToken, toggleAutoApprove } from './actions'
 import { TokenField } from './token-field'
 import { CodeBlock } from './code-block'
+import { getAutoApproveOnSend } from '@/lib/data'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AccountPage() {
   const user = await currentUser()
   if (!user) redirect('/login?next=/account')
+
+  const autoApprove = await getAutoApproveOnSend(user.id)
 
   const configExample = JSON.stringify(
     {
@@ -94,6 +97,37 @@ export default async function AccountPage() {
             <CodeBlock code={configExample} />
           </div>
         </div>
+      </section>
+
+      {/* Auto-approve-on-send toggle */}
+      <section className="card-pad space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-ink">Auto-approve on send</h2>
+          <p className="mt-1 text-sm leading-relaxed text-stone-500">
+            When your agent sends a text or email to someone, they are
+            automatically added to the Approved list for that channel. This
+            means when they reply, your agent can read the reply right away
+            without you having to tap an approve link. Recommended.
+          </p>
+        </div>
+        <form action={toggleAutoApprove} className="flex items-center gap-3">
+          <input type="hidden" name="enabled" value={autoApprove ? 'false' : 'true'} />
+          <button
+            type="submit"
+            className={
+              autoApprove
+                ? 'rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100'
+                : 'rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-semibold text-stone-600 transition-colors hover:bg-stone-100'
+            }
+          >
+            {autoApprove ? '✓ Enabled' : 'Disabled'}
+          </button>
+          <span className="text-xs text-stone-400">
+            {autoApprove
+              ? 'Recipients are auto-approved. Click to disable.'
+              : 'Recipients stay gated. Click to enable.'}
+          </span>
+        </form>
       </section>
     </div>
   )

@@ -8,6 +8,7 @@
  */
 import { getSupabase } from './supabase'
 import { senderMatchCandidates, pickMostSpecific } from './match'
+import { normalizeAddress } from './address'
 import type { Action, ActionStatus, Channel, ChannelType, CheckStatus, Sender, SenderStatus } from './types'
 
 /**
@@ -571,4 +572,69 @@ export async function updateActionStatus(
   const row = data as Action
   assertRowOwned(row, ownerId)
   return row
+}
+
+/* ------------------------------------------------------------------ */
+/* Auto-approve-on-send                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Read the per-account `auto_approve_on_send` flag.
+ * Returns true by default (the column is NOT NULL DEFAULT TRUE).
+ */
+export async function getAutoApproveOnSend(ownerId: string): Promise<boolean> {
+  assertOwner(ownerId)
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('sna_users')
+    .select('auto_approve_on_send')
+    .eq('id', ownerId)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return (data as { auto_approve_on_send?: boolean } | null)?.auto_approve_on_send ?? true
+}
+
+/**
+ * Set the per-account `auto_approve_on_send` flag.
+ */
+export async function setAutoApproveOnSend(
+  ownerId: string,
+  enabled: boolean
+): Promise<boolean> {
+  assertOwner(ownerId)
+  const supabase = getSupabase()
+  const { error } = await supabase
+    .from('sna_users')
+    .update({ auto_approve_on_send: enabled })
+    .eq('id', ownerId)
+  if (error) throw new Error(error.message)
+  return enabled
+}
+
+/**
+ * Auto-approve a recipient after the agent sends them a message.
+ * Only upserts if the owner's `auto_approve_on_send` flag is TRUE; otherwise
+ * this is a no-op. This is the ONE path where a READ-token-authenticated
+ * request can cause an approval - it is safe because the owner explicitly
+ * opted in via the dashboard toggle, and only outbound recipients are affected.
+ */
+export async function autoApproveIfEnabled(
+  ownerId: string,
+  channelId: string,
+  address: string
+): Promise<{ approved: boolean; reason: string }> {
+  assertOwner(ownerId)
+  const normalized = normalizeAddress(address)
+  if (!normalized) return { approved: false, reason: 'Invalid address.' }
+
+  const enabled = await getAutoApproveOnSend(ownerId)
+  if (!enabled) return { approved: false, reason: 'Auto-approve is disabled.' }
+
+  await upsertSender(ownerId, {
+    channel_id: channelId,
+    sender_address: normalized,
+    status: 'approved',
+    decided_by: 'auto-approve-on-send',
+  })
+  return { approved: true, reason: 'Auto-approved after outbound send.' }
 }

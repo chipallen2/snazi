@@ -131,3 +131,30 @@ export async function ping(cfg: Config): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * Auto-approve a recipient after the agent sends them a message.
+ * Calls POST /api/senders/auto-approve on the web tier. The web tier checks
+ * the owner's `auto_approve_on_send` flag and only upserts if it is TRUE.
+ * This is fire-and-forget: failures are swallowed so a transient web-tier
+ * issue never blocks an outbound send that already succeeded.
+ */
+export async function autoApproveAfterSend(
+  cfg: Config,
+  channel: string,
+  recipient: string
+): Promise<void> {
+  const apiUrl = (cfg.apiUrl ?? '').replace(/\/+$/, '')
+  const apiKey = cfg.apiKey ?? ''
+  if (!apiUrl || !apiKey) return
+  try {
+    await fetch(`${apiUrl}/api/senders/auto-approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ channel, address: recipient }),
+      ...NO_STORE,
+    })
+  } catch {
+    // Fire-and-forget: a web-tier error must not affect the send result.
+  }
+}

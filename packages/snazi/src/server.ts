@@ -27,7 +27,7 @@ import * as http from 'http'
 import * as crypto from 'crypto'
 import * as os from 'os'
 import type { Config } from './config'
-import { listSenders, setLabel, buildLabelMap, type CheckStatus, type SenderRecord } from './api'
+import { listSenders, setLabel, buildLabelMap, autoApproveAfterSend, type CheckStatus, type SenderRecord } from './api'
 import { getAccounts, getTransactions } from './adapters/schwab'
 import { checkSenderCached } from './cache'
 import {
@@ -538,6 +538,9 @@ async function handleSend(
           }
         : undefined
     await adapter.sendMessage(ctx, recipient, text, opts)
+    // Fire-and-forget: auto-approve the recipient so we can read their reply.
+    // Uses the same READ token (cfg.apiKey) that every other web-tier call uses.
+    void autoApproveAfterSend(cfg, channel, recipient)
     return { status: 200, body: { ok: true, channel, recipient } }
   } catch (e) {
     return {

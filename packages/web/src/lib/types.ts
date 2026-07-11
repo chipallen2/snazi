@@ -87,5 +87,6 @@ export interface User {
   id: string
   email: string
   read_token: string
+  auto_approve_on_send: boolean
   created_at: string
 }
