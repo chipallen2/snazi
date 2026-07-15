@@ -329,6 +329,24 @@ snazi remote-send "hannah@example.com" --channel gmail-chip \
 - iMessage has no forward concept here; `--forward-msg` is ignored on that
   channel.
 
+### Saving drafts (Gmail + Outlook)
+
+Add `--draft` to save the message to the account's Drafts folder **without
+sending it**. This works on both local (`snazi send`) and remote
+(`snazi remote-send`) paths, for both Gmail and Outlook.
+
+```bash
+snazi remote-send ceo@company.com \
+  --text $'Subject: Q3 budget review\n\nLet\'s discuss in Thursday\'s meeting.' \
+  --channel outlook-work \
+  --draft
+```
+
+- The draft appears in the account's Drafts folder, ready to review and send
+  from the mail client.
+- Not supported with `--reply-to` or `--forward-msg` (draft replies/forwards
+  are a future enhancement).
+
 ### Credentials live ONLY on the messages machine
 
 OAuth tokens / secrets are written to `~/.snazi/config.json` (created `0600`) and

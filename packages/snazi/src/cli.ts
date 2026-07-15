@@ -240,6 +240,7 @@ async function cmdSend(args: string[]): Promise<number> {
   const forwardMsg = flag(args, '--forward-msg')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
+  const draft = hasFlag(args, '--draft')
 
   let html: string | undefined
   if (htmlFile != null) {
@@ -259,7 +260,7 @@ async function cmdSend(args: string[]): Promise<number> {
         'Usage: snazi send <recipient> (--text <message> | --html-file <path> | ' +
         '--html-text <html> | --forward-msg <messageId> [--text <comment>]) ' +
         '[--subject <s>] [--from <alias>] [--reply-to <messageId>] ' +
-        '[--reply-all] [--channel <id>]',
+        '[--reply-all] [--draft] [--channel <id>]',
     })
     return 2
   }
@@ -291,6 +292,7 @@ async function cmdSend(args: string[]): Promise<number> {
       replyToMessageId?: string
       replyAll?: boolean
       forwardMessageId?: string
+      draft?: boolean
     } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
@@ -298,6 +300,7 @@ async function cmdSend(args: string[]): Promise<number> {
     if (replyTo != null) opts.replyToMessageId = replyTo
     if (replyAll) opts.replyAll = true
     if (forwardMsg != null) opts.forwardMessageId = forwardMsg
+    if (draft) opts.draft = true
     await adapter.sendMessage(
       ctx,
       target,
@@ -672,6 +675,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
   const forwardMsg = flag(args, '--forward-msg')
   const htmlFile = flag(args, '--html-file')
   const htmlText = flag(args, '--html-text')
+  const draft = hasFlag(args, '--draft')
 
   // Resolve the HTML body (if any) from --html-file or --html-text.
   let html: string | undefined
@@ -693,7 +697,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
         'Usage: snazi remote-send <recipient> (--text <message> | ' +
         '--html-file <path> | --html-text <html> | ' +
         '--forward-msg <messageId> [--text <comment>]) [--subject <s>] [--from <alias>] ' +
-        '[--reply-to <messageId>] [--reply-all] [--channel <id>]',
+        '[--reply-to <messageId>] [--reply-all] [--draft] [--channel <id>]',
     })
     return 2
   }
@@ -714,6 +718,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
       replyToMessageId?: string
       replyAll?: boolean
       forwardMessageId?: string
+      draft?: boolean
     } = {}
     if (subject != null) opts.subject = subject
     if (html != null) opts.html = html
@@ -721,6 +726,7 @@ async function cmdRemoteSend(args: string[]): Promise<number> {
     if (replyTo != null) opts.replyToMessageId = replyTo
     if (replyAll) opts.replyAll = true
     if (forwardMsg != null) opts.forwardMessageId = forwardMsg
+    if (draft) opts.draft = true
     // text may be omitted for an HTML-only send; the server/adapter derives a
     // plaintext alternative from the HTML in that case.
     const { status, json } = await remoteSend(cfg, target, channel, text ?? '', opts)
@@ -964,6 +970,7 @@ Usage:
                                                         Email: add --html-file <path>|--html-text <html> [--subject <s>] to send HTML
                                                         Reply (real threading): add --reply-to <messageId> [--reply-all] (id comes from a read row)
                                                         Forward (real forward, new thread): add --forward-msg <messageId> [--text <comment>]; Gmail re-attaches original attachments best-effort, Outlook uses native /forward
+                                                        Draft (save without sending): add --draft; saves to the account's Drafts folder (not with --reply-to or --forward-msg)
   snazi check <sender> --channel <id>                   Print one sender's approval status
   snazi channels list                                   List configured channels (instances) + adapter availability here
   snazi channels add <id> [--type <t>] [--name <n>] [auth flags]   Configure a channel instance (e.g. id gmail-work, type gmail)
@@ -998,6 +1005,7 @@ Agent machine (set up with 'snazi init-agent'; calls your messages machine's gat
                                                         Email: add --html-file <path>|--html-text <html> [--subject <s>] to send HTML
                                                         Reply (real threading): add --reply-to <messageId> [--reply-all]; subject auto-derived. read rows now include each message id
                                                         Forward (real forward, new thread): add --forward-msg <messageId> [--text <comment>]; Gmail re-attaches original attachments best-effort, Outlook uses native /forward
+                                                        Draft (save without sending): add --draft; saves to the account's Drafts folder (not with --reply-to or --forward-msg)
   snazi remote-resolve [<name>] [--channel <id>]        Resolve a name → sender address(es) (empty = address book)
   snazi remote-label <sender> --name <name> [--channel <id>]  Set a sender's display name (label only; cannot open the gate)
   snazi remote-action <archive|delete|markRead|markUnread> (--sender <addr> | --message-id <id>) [--channel <id>] [--since <min>]

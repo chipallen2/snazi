@@ -526,6 +526,34 @@ export const outlookAdapter: ChannelAdapter = {
     const bodyPayload = opts?.html
       ? { contentType: 'HTML', content: opts.html }
       : { contentType: 'Text', content: opts?.subject != null ? text : parsed.body }
+    const messagePayload = {
+      subject,
+      body: bodyPayload,
+      toRecipients: [{ emailAddress: { address: recipient } }],
+      ...(fromAddr ? { from: { emailAddress: { address: fromAddr } } } : {}),
+    }
+
+    // Draft mode: POST /me/messages creates a draft in the Drafts folder
+    // by default (no /sendMail needed). Only for new messages, not reply/forward.
+    if (opts?.draft) {
+      if (opts.replyToMessageId || opts.forwardMessageId) {
+        throw new Error('Draft mode does not support reply or forward. Use a plain send with --draft.')
+      }
+      const res = await fetch(`${GRAPH}/me/messages`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(messagePayload),
+      })
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '')
+        throw new Error(`Outlook draft failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+      }
+      return
+    }
+
     const res = await fetch(`${GRAPH}/me/sendMail`, {
       method: 'POST',
       headers: {
@@ -533,12 +561,7 @@ export const outlookAdapter: ChannelAdapter = {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        message: {
-          subject,
-          body: bodyPayload,
-          toRecipients: [{ emailAddress: { address: recipient } }],
-          ...(fromAddr ? { from: { emailAddress: { address: fromAddr } } } : {}),
-        },
+        message: messagePayload,
         saveToSentItems: true,
       }),
     })

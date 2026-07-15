@@ -144,6 +144,13 @@ export interface SendOptions {
    * precedence over `replyToMessageId` if both are somehow set.
    */
   forwardMessageId?: string
+  /**
+   * When true, save the message as a draft in the account's Drafts folder
+   * instead of sending it. Email channels only. Not supported with
+   * `replyToMessageId` or `forwardMessageId` (draft replies/forwards are
+   * a future enhancement).
+   */
+  draft?: boolean
 }
 
 export interface ChannelContext {

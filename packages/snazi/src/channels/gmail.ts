@@ -483,6 +483,27 @@ export const gmailAdapter: ChannelAdapter = {
               })
             : buildPlainRaw(recipient, from, ...subjectBody(text, opts?.subject)),
         }
+    // Draft mode: save to Drafts folder without sending. Only for new
+    // messages (not reply/forward - those need threadId on the draft, which
+    // is a future enhancement).
+    if (opts?.draft) {
+      if (opts.replyToMessageId || opts.forwardMessageId) {
+        throw new Error('Draft mode does not support reply or forward. Use a plain send with --draft.')
+      }
+      const res = await fetch(`${API_BASE}/drafts`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ message: sendBody }),
+      })
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '')
+        throw new Error(`Gmail draft failed: HTTP ${res.status} ${errBody.slice(0, 200)}`)
+      }
+      return
+    }
     const res = await fetch(`${API_BASE}/messages/send`, {
       method: 'POST',
       headers: {

@@ -506,6 +506,7 @@ async function handleSend(
     replyToMessageId?: unknown
     replyAll?: unknown
     forwardMessageId?: unknown
+    draft?: unknown
   }
   const recipient = parseRecipient(typeof b.recipient === 'string' ? b.recipient : null)
   const channel = parseChannel(typeof b.channel === 'string' ? b.channel : null)
@@ -515,6 +516,7 @@ async function handleSend(
   const replyToMessageId = parseMessageId(b.replyToMessageId)
   const replyAll = b.replyAll === true
   const forwardMessageId = parseMessageId(b.forwardMessageId)
+  const draft = b.draft === true
   // `text` is required for a plain send, but optional when `html` is provided
   // (the adapter derives a plaintext alternative) or when forwarding (the
   // adapter fetches the original body itself). Always pass a plaintext
@@ -527,7 +529,7 @@ async function handleSend(
   }
   try {
     const opts =
-      html || subject || from || replyToMessageId || replyAll || forwardMessageId
+      html || subject || from || replyToMessageId || replyAll || forwardMessageId || draft
         ? {
             ...(html ? { html } : {}),
             ...(subject ? { subject } : {}),
@@ -535,6 +537,7 @@ async function handleSend(
             ...(replyToMessageId ? { replyToMessageId } : {}),
             ...(replyAll ? { replyAll: true } : {}),
             ...(forwardMessageId ? { forwardMessageId } : {}),
+            ...(draft ? { draft: true } : {}),
           }
         : undefined
     await adapter.sendMessage(ctx, recipient, text, opts)
